@@ -34,6 +34,7 @@ class TaskExecutor(ToolExecutor):
                 subagent_type=action.subagent_type,
                 description=action.description,
                 resume=action.resume,
+                llm_profile=action.llm_profile,
                 conversation=conversation,
             )
             match task.status:

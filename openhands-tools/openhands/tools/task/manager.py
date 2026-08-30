@@ -167,6 +167,7 @@ class TaskManager:
         subagent_type: str = "default",
         resume: str | None = None,
         description: str | None = None,
+        llm_profile: str | None = None,
         conversation: LocalConversation | None = None,
     ) -> Task:
         """Start a blocking sub-agent task.
@@ -176,6 +177,9 @@ class TaskManager:
             subagent_type: Type of agent to use.
             resume: Task ID to resume (continues existing conversation).
             description: Short label for the task.
+            llm_profile: Optional saved LLM profile name for the worker. The
+                subagent definition's own ``model:`` takes precedence; unknown
+                profiles raise before the task starts.
             conversation: Parent conversation (set on first call).
 
         Returns:
@@ -188,11 +192,13 @@ class TaskManager:
             task = self._resume_task(
                 resume=resume,
                 subagent_type=subagent_type,
+                llm_profile=llm_profile,
             )
         else:
             task = self._create_task(
                 subagent_type=subagent_type,
                 description=description,
+                llm_profile=llm_profile,
             )
 
         return self._run_task(
@@ -200,7 +206,12 @@ class TaskManager:
             prompt=prompt,
         )
 
-    def _resume_task(self, resume: str, subagent_type: str) -> Task:
+    def _resume_task(
+        self,
+        resume: str,
+        subagent_type: str,
+        llm_profile: str | None = None,
+    ) -> Task:
         """Resume a sub-agent task."""
         with self._tasks_lock:
             if resume not in self._tasks:
@@ -210,7 +221,9 @@ class TaskManager:
                 )
 
             factory = get_agent_factory(subagent_type)
-            worker_agent = self._get_sub_agent_from_factory(factory)
+            worker_agent = self._get_sub_agent_from_factory(
+                factory, llm_profile=llm_profile
+            )
             conversation_id = self._tasks[resume].conversation_id
             with detached_delegate_context() as link:
                 conversation = LocalConversation(
@@ -245,6 +258,7 @@ class TaskManager:
         self,
         subagent_type: str,
         description: str | None,
+        llm_profile: str | None = None,
     ) -> Task:
         """Create a fresh task.
 
@@ -253,7 +267,9 @@ class TaskManager:
         2. The parent conversation's ``max_iteration_per_run``
         """
         factory = get_agent_factory(subagent_type)
-        worker_agent = self._get_sub_agent_from_factory(factory)
+        worker_agent = self._get_sub_agent_from_factory(
+            factory, llm_profile=llm_profile
+        )
 
         effective_max_iter = (
             factory.definition.max_iteration_per_run
@@ -360,12 +376,36 @@ class TaskManager:
         factory = get_agent_factory(subagent_type)
         return self._get_sub_agent_from_factory(factory)
 
-    def _get_sub_agent_from_factory(self, factory: "AgentFactory") -> Agent:
-        """Create a sub-agent from an AgentFactory."""
+    def _get_sub_agent_from_factory(
+        self, factory: "AgentFactory", llm_profile: str | None = None
+    ) -> Agent:
+        """Create a sub-agent from an AgentFactory.
+
+        When ``llm_profile`` names a saved LLM profile, the worker runs on that
+        profile's model instead of the parent's. Precedence follows #4510:
+        the subagent definition's own ``model:`` (applied inside the factory)
+        wins over the per-call profile, which wins over the parent model. An
+        unknown profile raises before any task state is registered — there is
+        no silent fallback to the parent model.
+        """
         parent = self.parent_conversation
         parent_llm = parent.agent.llm
 
         llm_updates: dict = {"stream": False}
+        if llm_profile is not None:
+            store = parent._profile_store
+            available = [name.removesuffix(".json") for name in store.list()]
+            profile_name = llm_profile.removesuffix(".json")
+            if profile_name not in available:
+                raise ValueError(
+                    f"LLM profile {llm_profile!r} not found in profile store.\n"
+                    f"Available profiles: {available}"
+                )
+            loaded = store._load_for_execution(profile_name, cipher=parent._cipher)
+            # The loaded profile's model/options become the worker's; parent
+            # fields not present in the profile are preserved via model_copy.
+            llm_updates.update(loaded.model_dump())
+
         sub_agent_llm = parent_llm.model_copy(update=llm_updates)
         # Reset metrics such that the sub-agent has its own
         # Metrics object

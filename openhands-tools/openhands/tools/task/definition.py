@@ -48,6 +48,16 @@ class TaskAction(Action):
         default="general-purpose",
         description="The type of specialized agent to use for this task.",
     )
+    llm_profile: str | None = Field(
+        default=None,
+        description=(
+            "Optional saved LLM profile name for this task's worker. Overrides "
+            "the parent model for this sub-agent without changing the parent. "
+            "The subagent definition's own `model:` still takes precedence. "
+            "Unknown profiles fail before the task starts; there is no silent "
+            "fallback to the parent model."
+        ),
+    )
     resume: str | None = Field(
         default=None,
         description="Task ID of the task to resume from.",
