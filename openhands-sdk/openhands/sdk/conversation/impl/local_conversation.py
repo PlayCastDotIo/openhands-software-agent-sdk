@@ -406,6 +406,7 @@ class LocalConversation(BaseConversation):
             if recovered_specs:
                 register_client_tools(recovered_specs)
         self.agent = agent
+        self._cipher = cipher
 
         self._bind_conversation_context(self.agent.llm)
 
@@ -486,7 +487,6 @@ class LocalConversation(BaseConversation):
         # This ensures plugins are loaded before agent initialization
         self.llm_registry = LLMRegistry()
         self._profile_store = LLMProfileStore(profile_store_dir)
-        self._cipher = cipher
 
         # Seed agent_context.secrets into the registry for every agent (regular
         # and ACP), covering callers that skip create_request() — canvas /
@@ -835,6 +835,7 @@ class LocalConversation(BaseConversation):
                 stuck_detection=self._stuck_detector is not None,
                 visualizer=type(self._visualizer) if self._visualizer else None,
                 delete_on_close=self.delete_on_close,
+                cipher=self._cipher,
                 tags=tags,
             )
 
@@ -1214,6 +1215,7 @@ class LocalConversation(BaseConversation):
             register_plugin_agents(
                 agents=all_plugin_agents,
                 work_dir=self.workspace.working_dir,
+                cipher=self._cipher,
             )
 
         # Combine explicit hook_config with plugin hooks
@@ -1459,6 +1461,7 @@ class LocalConversation(BaseConversation):
                 register_plugin_agents(
                     agents=plugin.agents,
                     work_dir=self.workspace.working_dir,
+                    cipher=self._cipher,
                 )
             if plugin.hooks and not plugin.hooks.is_empty():
                 self._merge_runtime_plugin_hooks(plugin.hooks)
@@ -1497,7 +1500,7 @@ class LocalConversation(BaseConversation):
                 then `~/.openhands/agents/*.md`)
         """
         # register project-level and then user-level file-based agents
-        register_file_agents(self.workspace.working_dir)
+        register_file_agents(self.workspace.working_dir, cipher=self._cipher)
 
     def _ensure_agent_ready(self) -> None:
         """Ensure the agent is fully initialized with plugins and agents loaded.
@@ -1603,6 +1606,8 @@ class LocalConversation(BaseConversation):
         See #3443 for background.
         """
         llm._call_context = self.get_llm_call_context()
+        if llm.fallback_strategy is not None:
+            llm.fallback_strategy._bind_cipher(self._cipher)
 
     def _condenser_for_switched_llm(
         self,
