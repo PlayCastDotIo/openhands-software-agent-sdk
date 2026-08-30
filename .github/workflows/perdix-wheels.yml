@@ -1,0 +1,66 @@
+---
+name: Build Perdix SDK wheels
+
+on:
+  # Attach prebuilt wheels to a GitHub Release when it is published.
+  release:
+    types: [published]
+  # Manual build; uploads to a release whose tag matches the input.
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Git tag of the release to attach wheels to (e.g. perdix-1.44.1)"
+        required: true
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: latest
+          python-version: "3.13"
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build all four wheels
+        run: |
+          set -euo pipefail
+          PACKAGES=(
+            openhands-sdk
+            openhands-tools
+            openhands-workspace
+            openhands-agent-server
+          )
+          for PKG in "${PACKAGES[@]}"; do
+            echo "===== $PKG ====="
+            uv build --package "$PKG"
+          done
+
+      - name: Upload wheels to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAG" ]]; then
+            echo "No release tag resolved; wheels remain in dist/ (artifacts only)."
+            exit 0
+          fi
+          # Tag must exist as a release. --clobber makes re-runs idempotent.
+          gh release upload "$TAG" dist/*.whl --clobber
+          echo "Uploaded wheels to release $TAG"
+          ls -la dist/
