@@ -45,7 +45,7 @@ class LLMSummarizingCondenser(RollingCondenser):
     """
 
     llm: LLM
-    max_size: int = Field(default=240, gt=0)
+    max_size: int = Field(default=2000, gt=0)
     max_tokens: int | None = None
 
     keep_first: int = Field(default=2, ge=0)
@@ -515,7 +515,7 @@ class LLMSummarizingCondenser(RollingCondenser):
 
 # Sizing for the standard summarizing condenser. Kept here so the default agent and
 # spawned sub-agents stay in sync.
-_DEFAULT_MAX_SIZE: Final[int] = 80
+_DEFAULT_MAX_SIZE: Final[int] = 2000
 _DEFAULT_KEEP_FIRST: Final[int] = 4
 
 

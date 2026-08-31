@@ -165,10 +165,12 @@ class CondenserSettings(BaseModel):
         },
     )
     max_size: int = Field(
-        default=240,
+        default=2000,
         ge=20,
         description=(
-            "Maximum number of events kept before the condenser runs. "
+            "Maximum number of events kept before the condenser runs. This is a "
+            "safety net; for large-context models the token threshold (see "
+            "``max_tokens`` / ``max_tokens_fraction``) is the governing limit. "
             "Kept on the base settings class for compatibility; concrete "
             "condenser-settings variants may opt out when this does not apply."
         ),
@@ -204,11 +206,31 @@ class LLMSummarizingCondenserSettings(CondenserSettings):
         gt=0,
         description=(
             "Maximum number of tokens allowed before the condenser runs. "
-            "When unset, condensation is only based on event count."
+            "When unset, the threshold is ``max_tokens_fraction`` of the model's "
+            "effective input context window. When the model's context is unknown, "
+            "condensation is only based on event count."
         ),
         json_schema_extra={
             SETTINGS_METADATA_KEY: SettingsFieldMetadata(
                 label="Max tokens",
+                prominence=SettingProminence.MINOR,
+                depends_on=("enabled",),
+            ).model_dump()
+        },
+    )
+    max_tokens_fraction: float = Field(
+        default=0.8,
+        gt=0,
+        le=1.0,
+        description=(
+            "Fraction of the model's effective max input tokens at which to "
+            "condense when ``max_tokens`` is unset. Scales dynamically with the "
+            "model's context window (e.g. 0.8 of a 1M-context model condenses at "
+            "800k tokens)."
+        ),
+        json_schema_extra={
+            SETTINGS_METADATA_KEY: SettingsFieldMetadata(
+                label="Max tokens fraction",
                 prominence=SettingProminence.MINOR,
                 depends_on=("enabled",),
             ).model_dump()
@@ -281,23 +303,25 @@ class LLMSummarizingCondenserSettings(CondenserSettings):
         condenser_llm = llm.model_copy(update={"usage_id": "condenser"})
         condenser_llm.reset_metrics()
         condenser_kwargs = self.model_dump(
-            exclude={"enabled", "condenser_kind"},
+            exclude={"enabled", "condenser_kind", "max_tokens_fraction"},
             exclude_none=True,
         )
         # If the user didn't explicitly configure a condenser token limit, inherit
-        # the agent LLM's effective max input tokens so condensation can be
-        # triggered by token count, not just event count.
+        # a fraction of the agent LLM's effective max input tokens so condensation
+        # scales with the model's context window rather than event count alone.
         if "max_tokens" not in self.model_fields_set:
             effective_max_input_tokens = llm.effective_max_input_tokens
             if effective_max_input_tokens is not None:
-                condenser_kwargs["max_tokens"] = effective_max_input_tokens
+                condenser_kwargs["max_tokens"] = int(
+                    effective_max_input_tokens * self.max_tokens_fraction
+                )
         return LLMSummarizingCondenser(llm=condenser_llm, **condenser_kwargs)
 
 
 class NoOpCondenserSettings(CondenserSettings):
     """Settings for a condenser that leaves conversation views unchanged."""
 
-    max_size: ClassVar[int] = 240  # type: ignore[reportIncompatibleVariableOverride]
+    max_size: ClassVar[int] = 2000  # type: ignore[reportIncompatibleVariableOverride]
     condenser_kind: Literal["no_op"] = Field(
         default="no_op",
         description=(

@@ -139,6 +139,14 @@ def test_llm_agent_settings_export_schema_groups_sections() -> None:
     assert (
         condenser_fields["condenser.max_tokens"].prominence is SettingProminence.MINOR
     )
+    assert condenser_fields["condenser.max_tokens_fraction"].default == 0.8
+    assert condenser_fields["condenser.max_tokens_fraction"].depends_on == [
+        "condenser.enabled"
+    ]
+    assert (
+        condenser_fields["condenser.max_tokens_fraction"].prominence
+        is SettingProminence.MINOR
+    )
 
     # -- verification section (critic settings only) --
     v_fields = {f.key: f for f in sections["verification"].fields}
@@ -1108,13 +1116,10 @@ def test_llm_create_agent_builds_condenser_when_enabled() -> None:
     assert agent.condenser.llm.metrics is not agent_metrics
 
 
-def test_llm_summarizing_condenser_inherits_max_tokens_from_llm() -> None:
-    """When the condenser's ``max_tokens`` is left unset, it should inherit
-    the agent LLM's ``effective_max_input_tokens`` so that condensation can
-    be triggered by token count, not just event count. See #3746: a
-    configured ``max_input_tokens`` on the LLM had no effect on the
-    condenser, so long tool outputs could blow past the context window
-    without ever triggering summarization.
+def test_llm_summarizing_condenser_inherits_max_tokens_fraction_from_llm() -> None:
+    """When the condenser's ``max_tokens`` is left unset, it should inherit a
+    fraction of the agent LLM's ``effective_max_input_tokens`` so condensation
+    scales with the model's context window rather than event count alone.
     """
     llm = LLM(model="test-model", usage_id="agent", max_input_tokens=65536)
     settings = OpenHandsAgentSettings(
@@ -1124,7 +1129,27 @@ def test_llm_summarizing_condenser_inherits_max_tokens_from_llm() -> None:
     agent = settings.create_agent()
 
     assert isinstance(agent.condenser, LLMSummarizingCondenser)
-    assert agent.condenser.max_tokens == 65536
+    assert agent.condenser.max_tokens == int(65536 * 0.8)
+
+
+def test_llm_summarizing_condenser_respects_custom_max_tokens_fraction() -> None:
+    """An explicitly configured ``max_tokens_fraction`` drives the inherited
+    token threshold instead of the 0.8 default.
+    """
+    llm = LLM(model="test-model", usage_id="agent", max_input_tokens=200000)
+    settings = OpenHandsAgentSettings(
+        llm=llm,
+        condenser=LLMSummarizingCondenserSettings(
+            enabled=True, max_tokens_fraction=0.5
+        ),
+    )
+    agent = settings.create_agent()
+
+    assert isinstance(agent.condenser, LLMSummarizingCondenser)
+    assert agent.condenser.max_tokens == 100000
+    # The fraction is build-time configuration and must not leak onto the
+    # condenser object, which has no such field.
+    assert not hasattr(agent.condenser, "max_tokens_fraction")
 
 
 def test_llm_summarizing_condenser_respects_explicit_max_tokens_over_llm() -> None:
@@ -1180,6 +1205,9 @@ def test_llm_summarizing_condenser_settings_match_condenser_fields() -> None:
     settings_fields = set(LLMSummarizingCondenserSettings.model_fields) - {
         "enabled",
         "condenser_kind",
+        # Build-time configuration consumed by build_condenser(); it resolves to
+        # the condenser's ``max_tokens`` and never lands on the condenser itself.
+        "max_tokens_fraction",
     }
 
     assert settings_fields == condenser_fields
