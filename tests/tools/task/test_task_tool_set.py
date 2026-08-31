@@ -12,7 +12,7 @@ from openhands.tools.task.definition import (
     TaskObservation,
     TaskProgressObservation,
 )
-from openhands.tools.task.manager import TaskStatus, _apply_model_identity
+from openhands.tools.task.manager import TaskStatus, _apply_model_identity, _tool_detail
 
 
 def _task_tool_call(
@@ -442,6 +442,31 @@ class TestTaskToolSetIntegration:
         suffix = agent.agent_context.system_message_suffix or ""
         assert suffix.startswith("Be terse.")
         assert "Flash" in suffix
+
+    def test_tool_detail_prefers_path_over_kind(self):
+        """The card's one-line status shows what a tool actually did."""
+
+        class TerminalObs:
+            kind = "TerminalObservation"
+            command = "git status"
+
+        class FileObs:
+            kind = "FileEditorObservation"
+            command = "view"
+            path = "src/db.py"
+
+        class GlobObs:
+            kind = "GlobObservation"
+            search_path = "src"
+
+        class EmptyObs:
+            kind = "TerminalObservation"
+            command = ""
+
+        assert _tool_detail(TerminalObs()) == "Running: git status"
+        assert _tool_detail(FileObs()) == "Editing: src/db.py"
+        assert _tool_detail(GlobObs()) == "Searching: src"
+        assert _tool_detail(EmptyObs()) == "Running: TerminalObservation"
 
 
 class TestTaskToolExamples:

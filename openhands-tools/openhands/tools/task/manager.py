@@ -101,6 +101,24 @@ class Task(BaseModel):
         self.status = TaskStatus.ERROR
 
 
+def _tool_detail(observation: object) -> str:
+    """One-line hint of what a tool observation did.
+
+    Prefer the concrete command/path a tool reports (running command, edited
+    file, searched dir) over the bare observation kind, which is meaningless
+    on a card.
+    """
+    for attr, action in (
+        ("path", "Editing"),
+        ("search_path", "Searching"),
+        ("command", "Running"),
+    ):
+        value = getattr(observation, attr, None)
+        if isinstance(value, str) and value.strip():
+            return f"{action}: {value.strip()}"
+    return f"Running: {getattr(observation, 'kind', 'tool')}"
+
+
 def _apply_model_identity(sub_agent: "Agent", llm_profile: str) -> "Agent":
     """Tell a profile-routed worker what model it runs as.
 
@@ -414,9 +432,9 @@ class TaskManager:
                 if role == "assistant":
                     detail = text
                 elif isinstance(event, ObservationEvent):
-                    detail = f"Running: {event.observation.kind}"
+                    detail = _tool_detail(event.observation)
             elif isinstance(event, ObservationEvent):
-                detail = f"Running: {event.observation.kind}"
+                detail = _tool_detail(event.observation)
             else:
                 return
             self._emit_progress(
