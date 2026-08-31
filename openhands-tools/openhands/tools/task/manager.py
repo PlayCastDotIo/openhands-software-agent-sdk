@@ -101,6 +101,34 @@ class Task(BaseModel):
         self.status = TaskStatus.ERROR
 
 
+def _apply_model_identity(sub_agent: "Agent", llm_profile: str) -> "Agent":
+    """Tell a profile-routed worker what model it runs as.
+
+    The profile's model is applied to the worker's LLM, but the default system
+    prompt never exposes it. Append a compact identity note to the worker's
+    ``AgentContext.system_message_suffix`` so the subagent can self-identify
+    when asked, instead of reporting "I don't know my model".
+    """
+    from openhands.sdk.context.agent_context import AgentContext
+
+    profile_name = llm_profile.removesuffix(".json")
+    model_note = (
+        "<MODEL_IDENTITY>\n"
+        f"You are currently running as LLM model: {sub_agent.llm.model}\n"
+        f"LLM profile: {profile_name}\n"
+        "</MODEL_IDENTITY>"
+    )
+    ctx = sub_agent.agent_context
+    if ctx is None:
+        ctx = AgentContext(system_message_suffix=model_note)
+    else:
+        existing = ctx.system_message_suffix or ""
+        ctx = ctx.model_copy(
+            update={"system_message_suffix": f"{existing}\n\n{model_note}".strip()}
+        )
+    return sub_agent.model_copy(update={"agent_context": ctx})
+
+
 class TaskManager:
     """Manage sub-agent tasks."""
 
@@ -496,6 +524,11 @@ class TaskManager:
         sub_agent = sub_agent.model_copy(
             update={"llm": sub_agent.llm.model_copy(update={"stream": False})}
         )
+
+        if llm_profile is not None:
+            # The worker's model comes from the profile; surface it so the
+            # subagent can self-identify instead of "I don't know my model".
+            sub_agent = _apply_model_identity(sub_agent, llm_profile)
         return sub_agent
 
     def _run_task(self, task: Task, prompt: str) -> Task:

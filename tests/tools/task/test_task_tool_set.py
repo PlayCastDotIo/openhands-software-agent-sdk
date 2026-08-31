@@ -12,7 +12,7 @@ from openhands.tools.task.definition import (
     TaskObservation,
     TaskProgressObservation,
 )
-from openhands.tools.task.manager import TaskStatus
+from openhands.tools.task.manager import TaskStatus, _apply_model_identity
 
 
 def _task_tool_call(
@@ -408,6 +408,40 @@ class TestTaskToolSetIntegration:
         observations = _get_task_observations(conversation)
         assert len(observations) == 1
         assert observations[0].is_error is True
+
+    # ── Model identity for profile-routed workers ─────────────────────
+
+    def test_model_identity_note_attached_to_profile_workers(self):
+        """A profile-routed worker can self-identify its model."""
+        sub_llm = TestLLM.from_messages(
+            [_text_message("ok")], model="openrouter/@preset/proof"
+        )
+        agent = _apply_model_identity(Agent(llm=sub_llm, tools=[]), "Proof")
+
+        assert agent.agent_context is not None
+        suffix = agent.agent_context.system_message_suffix or ""
+        assert "<MODEL_IDENTITY>" in suffix
+        assert "openrouter/@preset/proof" in suffix
+        assert "Proof" in suffix
+
+    def test_model_identity_note_appends_existing_suffix(self):
+        """Existing subagent system prompts are preserved, not replaced."""
+        from openhands.sdk.context.agent_context import AgentContext
+
+        sub_llm = TestLLM.from_messages([_text_message("ok")])
+        agent = _apply_model_identity(
+            Agent(
+                llm=sub_llm,
+                tools=[],
+                agent_context=AgentContext(system_message_suffix="Be terse."),
+            ),
+            "Flash",
+        )
+
+        assert agent.agent_context is not None
+        suffix = agent.agent_context.system_message_suffix or ""
+        assert suffix.startswith("Be terse.")
+        assert "Flash" in suffix
 
 
 class TestTaskToolExamples:
