@@ -126,7 +126,8 @@ class View(BaseModel):
                 self.unhandled_condensation_request = True
 
             case LLMConvertibleEvent():
-                self.events.append(event)
+                if getattr(event, "llm_visible", True):
+                    self.events.append(event)
 
             # If the event isn't related to condensation and isn't LLMConvertible, it
             # should not be in the resulting view. Examples include certain internal

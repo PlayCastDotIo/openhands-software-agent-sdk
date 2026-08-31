@@ -53,6 +53,47 @@ class TestAppendLLMConvertibleEvent:
         assert len(view) == 1
         assert view.events[0] is obs
 
+    def test_append_ui_only_observation_event_is_skipped(self) -> None:
+        view = View()
+        obs = create_observation_event(tool_call_id="tc_1", llm_visible=False)
+        view.append_event(obs)
+
+        assert len(view) == 0
+
+    def test_progress_stream_keeps_single_observation_pairing(self) -> None:
+        # A task call streams many UI-only progress observations sharing the
+        # action's tool_call_id, then one terminal result. The progress events
+        # must not enter the view: otherwise ToolCallMatchingProperty's
+        # pending-tool-call set would raise KeyError on the second duplicate
+        # when the parent resumes and condenses.
+        view = View()
+        action = create_action_event(
+            llm_response_id="resp_1", tool_call_id="tc_1", thinking="think"
+        )
+        view.append_event(action)
+
+        for i in range(5):
+            view.append_event(
+                create_observation_event(
+                    tool_call_id="tc_1",
+                    content="",
+                    tool_name="task",
+                    llm_visible=False,
+                )
+            )
+        result = create_observation_event(
+            tool_call_id="tc_1", content="Task complete", tool_name="task"
+        )
+        view.append_event(result)
+
+        assert [event.id for event in view.events] == [
+            action.id,
+            result.id,
+        ]
+        # Computed without raising KeyError; the pair boundaries stay clean.
+        indices = view.manipulation_indices
+        assert indices is not None
+
     def test_append_does_not_change_unhandled_flag(self) -> None:
         view = View()
         view.append_event(message_event("hello"))

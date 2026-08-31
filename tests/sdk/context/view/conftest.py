@@ -67,6 +67,7 @@ def create_observation_event(
     tool_call_id: str,
     content: str = "Success",
     tool_name: str = "test_tool",
+    llm_visible: bool = True,
 ) -> ObservationEvent:
     """Helper to create an ObservationEvent."""
     observation = MCPToolObservation.from_text(
@@ -79,4 +80,5 @@ def create_observation_event(
         tool_call_id=tool_call_id,
         action_id="action_event_id",
         source="environment",
+        llm_visible=llm_visible,
     )

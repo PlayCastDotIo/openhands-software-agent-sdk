@@ -686,6 +686,7 @@ class TaskManager:
                 action_id=action_event.id,
                 tool_name="task",
                 tool_call_id=action_event.tool_call.id,
+                llm_visible=False,
             )
             skip_lock = parent._step_holds_state_lock and not parent._state.owned()
             with contextlib.nullcontext() if skip_lock else parent._state:

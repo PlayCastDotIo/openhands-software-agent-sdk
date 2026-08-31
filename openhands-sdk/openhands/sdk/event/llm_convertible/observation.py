@@ -43,6 +43,16 @@ class ObservationEvent(ObservationBaseEvent):
             "by the touched file), appended after the tool result in to_llm_message."
         ),
     )
+    llm_visible: bool = Field(
+        default=True,
+        description=(
+            "Whether this observation participates in the LLM context view. "
+            "Set to False for UI-only progress pushes (e.g. task progress) so "
+            "they stay out of the parent LLM's context window and condensation "
+            "view, preserving the action -> single observation pairing "
+            "invariant enforced by the view properties."
+        ),
+    )
 
     @property
     def visualize(self) -> Text:
