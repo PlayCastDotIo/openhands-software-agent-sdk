@@ -75,6 +75,13 @@ class Task(BaseModel):
     )
     result: str | None = Field(default=None, description="Result of the task.")
     error: str | None = Field(default=None, description="Error if task failed.")
+    thread: list[dict[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "Live growing transcript of the sub-agent's run, forwarded as "
+            "TaskProgressObservation while the task runs."
+        ),
+    )
     conversation: LocalConversation | None = Field(
         default=None,
         exclude=True,
@@ -365,17 +372,31 @@ class TaskManager:
         """
 
         def forward(event: "Event") -> None:
-            if not isinstance(event, ObservationEvent):
-                return
-            detail = f"Running: {event.observation.kind}"
             try:
                 task = self._tasks.get(task_id)
             except Exception:
                 task = None
             if task is None:
                 return
+            detail: str | None = None
+            entry = self._event_to_thread_entry(event)
+            if entry is not None:
+                role, text = entry
+                task.thread.append({"role": role, "text": text})
+                if role == "assistant":
+                    detail = text
+                elif isinstance(event, ObservationEvent):
+                    detail = f"Running: {event.observation.kind}"
+            elif isinstance(event, ObservationEvent):
+                detail = f"Running: {event.observation.kind}"
+            else:
+                return
             self._emit_progress(
-                task, subagent=subagent, status="running", detail=detail
+                task,
+                subagent=subagent,
+                status="running",
+                detail=detail or "Thinking…",
+                thread=task.thread,
             )
 
         return forward
@@ -489,7 +510,11 @@ class TaskManager:
 
         subagent_name = self._task_subagent_name()
         self._emit_progress(
-            task, subagent=subagent_name, status="running", detail="Starting sub-agent."
+            task,
+            subagent=subagent_name,
+            status="running",
+            detail="Starting sub-agent.",
+            thread=task.thread,
         )
         try:
             task.conversation.send_message(prompt, sender=parent_name)
@@ -526,6 +551,34 @@ class TaskManager:
         return "sub-agent"
 
     @staticmethod
+    def _event_to_thread_entry(event: "Event") -> tuple[str, str] | None:
+        """Extract a ``{role, text}`` thread entry from a child event.
+
+        Assistant messages (the sub-agent's own text) become ``assistant``
+        entries; tool observations become ``tool`` entries. Returns ``None``
+        for events with no readable text (tool calls, the delegated prompt).
+        Best-effort: unreadable events are dropped.
+        """
+        from openhands.sdk.event import MessageEvent
+
+        try:
+            if isinstance(event, MessageEvent) and event.source == "agent":
+                text = " ".join(
+                    c.text for c in event.llm_message.content if c.type == "text"
+                ).strip()
+                if text:
+                    return "assistant", text
+            elif isinstance(event, ObservationEvent):
+                text = " ".join(
+                    c.text for c in event.observation.content if c.type == "text"
+                ).strip()
+                if text:
+                    return "tool", text
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
     def _build_thread(conversation: LocalConversation) -> list[dict[str, str]]:
         """Compact transcript of a sub-agent run for inline thread rendering.
 
@@ -534,26 +587,12 @@ class TaskManager:
         the useful text); user messages are the delegated prompt, which the card
         already shows. Best-effort: unreadable events are dropped.
         """
-        from openhands.sdk.event import MessageEvent
-        from openhands.sdk.event.llm_convertible.observation import ObservationEvent
-
         thread: list[dict[str, str]] = []
         for event in conversation.state.events:
-            try:
-                if isinstance(event, MessageEvent) and event.source == "agent":
-                    text = " ".join(
-                        c.text for c in event.llm_message.content if c.type == "text"
-                    ).strip()
-                    if text:
-                        thread.append({"role": "assistant", "text": text})
-                elif isinstance(event, ObservationEvent):
-                    text = " ".join(
-                        c.text for c in event.observation.content if c.type == "text"
-                    ).strip()
-                    if text:
-                        thread.append({"role": "tool", "text": text})
-            except Exception:
-                continue
+            entry = TaskManager._event_to_thread_entry(event)
+            if entry is not None:
+                role, text = entry
+                thread.append({"role": role, "text": text})
         return thread
 
     def _emit_progress(
@@ -563,6 +602,7 @@ class TaskManager:
         subagent: str,
         status: str,
         detail: str,
+        thread: list[dict[str, str]] | None = None,
     ) -> None:
         """Emit a ``TaskProgressObservation`` into the parent conversation.
 
@@ -590,6 +630,7 @@ class TaskManager:
                     conversation_id=str(task.conversation.state.id)
                     if task.conversation is not None
                     else None,
+                    thread=thread or [],
                 ),
                 action_id=action_event.id,
                 tool_name="task",

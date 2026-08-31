@@ -176,6 +176,19 @@ class TestTaskToolSetIntegration:
         assert observations[0].conversation_id is not None
         assert any(entry["role"] == "assistant" for entry in observations[0].thread)
 
+        # The live thread grows alongside the run: the "starting" event carries
+        # nothing, and the final progress event already contains the sub-agent's
+        # assistant message before the terminal TaskObservation lands.
+        assert progress[0].thread == []
+        final_progress = progress[-1]
+        assert any(
+            entry["role"] == "assistant" and entry["text"] == "I did the thing."
+            for entry in final_progress.thread
+        )
+        # Live thread is a strict prefix of the terminal transcript.
+        terminal_thread = observations[0].thread
+        assert final_progress.thread == terminal_thread[: len(final_progress.thread)]
+
     # ── Multiple sequential tasks ───────────────────────────────────
 
     def test_two_sequential_tasks(self, tmp_path):

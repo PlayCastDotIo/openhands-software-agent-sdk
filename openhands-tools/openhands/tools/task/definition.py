@@ -151,6 +151,15 @@ class TaskProgressObservation(Observation):
         default=None,
         description="The sub-agent conversation's id, when the task ran one.",
     )
+    thread: list[dict[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "Live growing transcript of the sub-agent's run: ordered "
+            "{role, text} entries (assistant messages and tool observations). "
+            "Appends as the sub-agent works; the terminal TaskObservation "
+            "carries the final thread."
+        ),
+    )
 
     @property
     def to_llm_content(self) -> Sequence[TextContent | ImageContent]:
