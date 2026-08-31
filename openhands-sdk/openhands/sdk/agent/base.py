@@ -300,6 +300,18 @@ class AgentBase(DiscriminatedUnionMixin, ABC):
         ),
     )
 
+    subagent_concurrency_limit: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Maximum number of sub-agent tasks (the `task` tool) to run "
+            "concurrently within a single agent step. Independent of "
+            "`tool_concurrency_limit`: sub-agents run in their own thread pool "
+            "so a wave of delegated tasks parallelizes even when the regular "
+            "tool-call limit is 1."
+        ),
+    )
+
     # Runtime materialized tools; private and non-serializable
     _tools: dict[str, ToolDefinition] = PrivateAttr(default_factory=dict)
     _tools_lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)

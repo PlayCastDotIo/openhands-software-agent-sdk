@@ -1,5 +1,6 @@
 """Tests for ParallelToolExecutor."""
 
+import asyncio
 import threading
 import time
 from typing import Any
@@ -238,3 +239,121 @@ def test_nested_execution_no_deadlock():
     )
 
     assert results == [["inner-a", "inner-b"]]
+
+
+def _max_concurrent_runs(
+    executor: ParallelToolExecutor,
+    actions: list[Any],
+    tools: dict[str, Any] | None = None,
+) -> int:
+    """Run a batch and return the peak number of concurrently-running calls."""
+    max_concurrent = [0]
+    current = [0]
+    lock = threading.Lock()
+
+    def tool_runner(action: Any) -> list:
+        with lock:
+            current[0] += 1
+            max_concurrent[0] = max(max_concurrent[0], current[0])
+        time.sleep(0.05)
+        with lock:
+            current[0] -= 1
+        return [MagicMock()]
+
+    executor.execute_batch(actions, tool_runner, tools)
+    return max_concurrent[0]
+
+
+def test_subagent_calls_parallelize_above_tool_call_limit():
+    """Task (delegating) calls use their own pool even when max_workers=1."""
+    executor = ParallelToolExecutor(max_workers=1, subagent_max_workers=3)
+    actions = [_make_action("task", f"call_{i}") for i in range(3)]
+
+    assert _max_concurrent_runs(executor, actions) > 1
+
+
+def test_subagent_calls_parallelize_via_delegating_tool_flag():
+    """A tool flagged ``is_delegating`` routes to the sub-agent pool."""
+
+    class _NoLockResources:
+        declared = True
+        keys = ()
+
+    class DelegatingTool:
+        name = "task"
+        is_delegating = True
+
+        def declared_resources(self, action: Any):
+            return _NoLockResources()
+
+    executor = ParallelToolExecutor(max_workers=1, subagent_max_workers=3)
+    actions = [_make_action("task", f"call_{i}") for i in range(3)]
+
+    assert _max_concurrent_runs(executor, actions, tools={"task": DelegatingTool()}) > 1
+
+
+def test_regular_calls_stay_limited_when_tool_limit_is_one():
+    """Non-delegating calls stay bounded by max_workers despite a big
+    sub-agent pool — the two limits are independent."""
+    executor = ParallelToolExecutor(max_workers=1, subagent_max_workers=3)
+    actions = [_make_action("terminal", f"call_{i}") for i in range(3)]
+
+    assert _max_concurrent_runs(executor, actions) == 1
+
+
+def test_mixed_batch_parallelizes_subagents_but_not_regular_calls():
+    """In a mixed batch, task calls parallelize while regular calls stay at
+    the tool-call limit, and results keep input order."""
+    executor = ParallelToolExecutor(max_workers=1, subagent_max_workers=3)
+    actions = [
+        _make_action("terminal", "call_0"),
+        _make_action("task", "call_1"),
+        _make_action("task", "call_2"),
+        _make_action("task", "call_3"),
+    ]
+    per_tool_max: dict[str, int] = {}
+    current: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def tool_runner(action: Any) -> list:
+        name = action.tool_name
+        with lock:
+            current[name] = current.get(name, 0) + 1
+            per_tool_max[name] = max(per_tool_max.get(name, 0), current[name])
+        time.sleep(0.05)
+        with lock:
+            current[name] -= 1
+        return [f"result-{action.tool_call_id}"]
+
+    results = executor.execute_batch(actions, tool_runner)
+
+    assert per_tool_max["terminal"] == 1
+    assert per_tool_max["task"] > 1
+    assert [r[0] for r in results] == [
+        "result-call_0",
+        "result-call_1",
+        "result-call_2",
+        "result-call_3",
+    ]
+
+
+def test_aexecute_batch_subagent_calls_parallelize():
+    """The async path also parallelizes delegating calls above max_workers."""
+    executor = ParallelToolExecutor(max_workers=1, subagent_max_workers=3)
+    actions = [_make_action("task", f"call_{i}") for i in range(3)]
+    max_concurrent = [0]
+    current = [0]
+    lock = threading.Lock()
+
+    def tool_runner(action: Any) -> list:
+        with lock:
+            current[0] += 1
+            max_concurrent[0] = max(max_concurrent[0], current[0])
+        time.sleep(0.05)
+        with lock:
+            current[0] -= 1
+        return [MagicMock()]
+
+    asyncio.run(executor.aexecute_batch(actions, tool_runner))
+
+    assert max_concurrent[0] > 1

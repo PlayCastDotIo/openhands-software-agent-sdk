@@ -10,7 +10,7 @@ and TaskToolSet (the entry-point that wires up a TaskManager-backed executor).
 """
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
@@ -236,6 +236,10 @@ Example — Perform a multi-step task involving code editing and shell commands:
 
 class TaskTool(ToolDefinition[TaskAction, TaskObservation]):
     """Tool for launching (blocking) sub-agent tasks."""
+
+    #: Sub-agent runs execute in their own concurrency pool, independent of
+    #: ``tool_concurrency_limit``.
+    is_delegating: ClassVar[bool] = True
 
     def declared_resources(self, action: Action) -> DeclaredResources:  # noqa: ARG002
         return DeclaredResources(keys=(), declared=True)

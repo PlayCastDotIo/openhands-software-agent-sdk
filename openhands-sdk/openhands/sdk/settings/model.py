@@ -1308,6 +1308,25 @@ class OpenHandsAgentSettings(AgentSettingsBase):
         },
     )
 
+    subagent_concurrency_limit: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Maximum number of sub-agent tasks (the `task` tool) to run "
+            "concurrently within a single agent step. Independent of "
+            "`tool_concurrency_limit`: sub-agents run in their own thread "
+            "pool so a wave of delegated tasks parallelizes even when the "
+            "regular tool-call limit is 1."
+        ),
+        json_schema_extra={
+            SETTINGS_METADATA_KEY: SettingsFieldMetadata(
+                label="Parallel sub-agents",
+                prominence=SettingProminence.MAJOR,
+                variant="openhands",
+            ).model_dump()
+        },
+    )
+
     mcp_config: dict[str, MCPServer] = Field(
         default_factory=dict,
         description="MCP servers available to the agent.",
@@ -1399,6 +1418,7 @@ class OpenHandsAgentSettings(AgentSettingsBase):
             condenser=condenser,
             critic=self.build_critic(),
             tool_concurrency_limit=self.tool_concurrency_limit,
+            subagent_concurrency_limit=self.subagent_concurrency_limit,
         )
 
     def build_condenser(self, llm: LLM) -> CondenserBase | None:

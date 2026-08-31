@@ -54,15 +54,45 @@ class ParallelToolExecutor:
     Each instance has its own thread pool, concurrency limit, and
     ``ResourceLockManager``, so nested execution (e.g., subagents) cannot
     deadlock the parent.
+
+    Sub-agent (delegating) tool calls — the ``task`` tool — are executed in a
+    *separate* thread pool sized by ``subagent_max_workers``, decoupled from
+    the regular ``max_workers`` limit. This lets a wave of delegated tasks run
+    in parallel even when ``tool_concurrency_limit`` is 1 (which would
+    otherwise serialize the blocking sub-agent runs).
     """
 
     def __init__(
         self,
         max_workers: int = 1,
+        subagent_max_workers: int = 1,
         lock_manager: ResourceLockManager | None = None,
     ) -> None:
         self._max_workers = max_workers
+        # The sub-agent pool is at least as large as the regular pool so a
+        # high `tool_concurrency_limit` keeps driving sub-agent parallelism
+        # (legacy behavior); `subagent_max_workers` raises the floor when the
+        # tool limit is low (decoupling).
+        self._subagent_max_workers = max(subagent_max_workers, max_workers)
         self._lock_manager = lock_manager or ResourceLockManager()
+
+    @staticmethod
+    def _partition(
+        action_events: Sequence[ActionEvent],
+        resolve: Callable[[ActionEvent], ToolDefinition | None],
+    ) -> tuple[list[ActionEvent], list[ActionEvent]]:
+        """Split a batch into sub-agent (delegating) calls and regular calls."""
+        subagent_events: list[ActionEvent] = []
+        regular_events: list[ActionEvent] = []
+        for ae in action_events:
+            tool = resolve(ae)
+            is_delegating = (
+                bool(getattr(tool, "is_delegating", False))
+                if tool is not None
+                else getattr(ae, "tool_name", None) == "task"
+            )
+            (subagent_events if is_delegating else regular_events).append(ae)
+        return subagent_events, regular_events
 
     def execute_batch(
         self,
@@ -95,19 +125,78 @@ class ParallelToolExecutor:
         def _resolve(ae: ActionEvent) -> ToolDefinition | None:
             return tools.get(ae.tool_name) if tools else None
 
-        if len(action_events) == 1 or self._max_workers == 1:
+        subagent_events, regular_events = self._partition(action_events, _resolve)
+
+        if not subagent_events:
+            return self._run_group(
+                regular_events,
+                self._max_workers,
+                tool_runner,
+                _resolve,
+                cancel_token,
+                span_owner,
+            )
+        if not regular_events:
+            return self._run_group(
+                subagent_events,
+                self._subagent_max_workers,
+                tool_runner,
+                _resolve,
+                cancel_token,
+                span_owner,
+            )
+
+        # Mixed batch: run each group in its own pool. The sync path can't
+        # overlap two pools without extra threads, but each group still gets
+        # its own concurrency (sub-agents parallelize against regular tools
+        # only when the regular group itself runs in a pool).
+        regular_results = self._run_group(
+            regular_events,
+            self._max_workers,
+            tool_runner,
+            _resolve,
+            cancel_token,
+            span_owner,
+        )
+        subagent_results = self._run_group(
+            subagent_events,
+            self._subagent_max_workers,
+            tool_runner,
+            _resolve,
+            cancel_token,
+            span_owner,
+        )
+        results_by_id = {
+            **dict(zip([ae.id for ae in regular_events], regular_results)),
+            **dict(zip([ae.id for ae in subagent_events], subagent_results)),
+        }
+        return [results_by_id[ae.id] for ae in action_events]
+
+    def _run_group(
+        self,
+        events: Sequence[ActionEvent],
+        max_workers: int,
+        tool_runner: Callable[[ActionEvent], list[Event]],
+        resolve: Callable[[ActionEvent], ToolDefinition | None],
+        cancel_token: CancellationToken | None,
+        span_owner: object | None,
+    ) -> list[list[Event]]:
+        """Run a group of tool calls with the given concurrency bound."""
+        if not events:
+            return []
+        if len(events) == 1 or max_workers == 1:
             return [
                 self._run_safe(
                     action,
                     tool_runner,
-                    _resolve(action),
+                    resolve(action),
                     cancel_token,
                     span_owner,
                 )
-                for action in action_events
+                for action in events
             ]
 
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # submit() itself propagates no contextvars; a fresh copy per task
             # because one Context cannot be entered by two threads.
             futures = [
@@ -116,11 +205,11 @@ class ParallelToolExecutor:
                     self._run_safe,
                     action,
                     tool_runner,
-                    _resolve(action),
+                    resolve(action),
                     cancel_token,
                     span_owner,
                 )
-                for action in action_events
+                for action in events
             ]
 
         return [future.result() for future in futures]
@@ -158,20 +247,80 @@ class ParallelToolExecutor:
         def _resolve(ae: ActionEvent) -> ToolDefinition | None:
             return tools.get(ae.tool_name) if tools else None
 
-        if len(action_events) == 1 or self._max_workers == 1:
+        subagent_events, regular_events = self._partition(action_events, _resolve)
+
+        if not subagent_events:
+            return await self._arun_group(
+                regular_events,
+                self._max_workers,
+                tool_runner,
+                _resolve,
+                cancel_token,
+                span_owner,
+            )
+        if not regular_events:
+            return await self._arun_group(
+                subagent_events,
+                self._subagent_max_workers,
+                tool_runner,
+                _resolve,
+                cancel_token,
+                span_owner,
+            )
+
+        # Mixed batch: run both groups concurrently, each in its own pool, so
+        # sub-agents parallelize even while regular tools stay bounded by the
+        # tool-call limit.
+        regular_results, subagent_results = await asyncio.gather(
+            self._arun_group(
+                regular_events,
+                self._max_workers,
+                tool_runner,
+                _resolve,
+                cancel_token,
+                span_owner,
+            ),
+            self._arun_group(
+                subagent_events,
+                self._subagent_max_workers,
+                tool_runner,
+                _resolve,
+                cancel_token,
+                span_owner,
+            ),
+        )
+        results_by_id = {
+            **dict(zip([ae.id for ae in regular_events], regular_results)),
+            **dict(zip([ae.id for ae in subagent_events], subagent_results)),
+        }
+        return [results_by_id[ae.id] for ae in action_events]
+
+    async def _arun_group(
+        self,
+        events: Sequence[ActionEvent],
+        max_workers: int,
+        tool_runner: Callable[[ActionEvent], list[Event]],
+        resolve: Callable[[ActionEvent], ToolDefinition | None],
+        cancel_token: CancellationToken | None,
+        span_owner: object | None,
+    ) -> list[list[Event]]:
+        """Run a group of tool calls concurrently, each in its own thread."""
+        if not events:
+            return []
+        if len(events) == 1 or max_workers == 1:
             return [
                 await self._arun_safe(
                     action,
                     tool_runner,
-                    _resolve(action),
+                    resolve(action),
                     cancel_token,
                     span_owner=span_owner,
                 )
-                for action in action_events
+                for action in events
             ]
 
         with ThreadPoolExecutor(
-            max_workers=self._max_workers,
+            max_workers=max_workers,
             thread_name_prefix="aexecute_batch",
         ) as pool:
             return list(
@@ -180,12 +329,12 @@ class ParallelToolExecutor:
                         self._arun_safe(
                             action,
                             tool_runner,
-                            _resolve(action),
+                            resolve(action),
                             cancel_token,
                             pool,
                             span_owner,
                         )
-                        for action in action_events
+                        for action in events
                     ]
                 )
             )
