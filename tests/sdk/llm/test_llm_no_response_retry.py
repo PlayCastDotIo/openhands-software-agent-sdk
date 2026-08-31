@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from litellm.exceptions import BadRequestError
 from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
@@ -11,7 +12,7 @@ from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 from pydantic import SecretStr
 
 from openhands.sdk.llm import LLM, LLMResponse, Message, TextContent
-from openhands.sdk.llm.exceptions import LLMNoResponseError
+from openhands.sdk.llm.exceptions import LLMBadRequestError, LLMNoResponseError
 
 
 def create_mock_response(
@@ -458,3 +459,44 @@ async def test_async_aresponses_stream_path_retry_bumps_temperature(
     assert mock_aresponses.call_count == 2
     _, second_kwargs = mock_aresponses.call_args_list[1]
     assert second_kwargs.get("temperature") == 1.0
+
+
+def _bad_request(message: str) -> BadRequestError:
+    return BadRequestError(
+        message=message,
+        model="gpt-4o",
+        llm_provider="openrouter",
+    )
+
+
+@patch("openhands.sdk.llm.llm.litellm_completion")
+def test_server_tool_request_failed_retries_then_succeeds(
+    mock_completion, base_llm: LLM
+) -> None:
+    """OpenRouter's transient 400 'Server tool request failed' is retried."""
+    mock_completion.side_effect = [
+        _bad_request('{"error":{"message":"Server tool request failed","code":400}}'),
+        create_mock_response("success"),
+    ]
+
+    resp = base_llm.completion(
+        messages=[Message(role="user", content=[TextContent(text="hi")])]
+    )
+
+    assert isinstance(resp, LLMResponse)
+    assert mock_completion.call_count == 2  # initial + 1 retry
+
+
+@patch("openhands.sdk.llm.llm.litellm_completion")
+def test_other_bad_request_error_is_not_retried(mock_completion, base_llm: LLM) -> None:
+    """A generic 400 (not the OpenRouter pattern) is still a hard failure."""
+    mock_completion.side_effect = [
+        _bad_request("Some other client error"),
+    ]
+
+    with pytest.raises(LLMBadRequestError):
+        base_llm.completion(
+            messages=[Message(role="user", content=[TextContent(text="hi")])]
+        )
+
+    assert mock_completion.call_count == 1

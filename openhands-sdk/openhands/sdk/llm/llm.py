@@ -152,6 +152,18 @@ LLM_RETRY_EXCEPTIONS: Final[tuple[type[Exception], ...]] = (
     LLMNoResponseError,
 )
 
+# OpenRouter returns HTTP 400 "Server tool request failed" when the upstream
+# provider intermittently fails to process a request containing tool calls.
+# It's a server-side transient, not a malformed client request, so retry it.
+# OpenRouter returns HTTP 400 "Server tool request failed" when the upstream
+# provider intermittently fails to process a request containing tool calls.
+# It's a server-side transient, not a malformed client request, so retry it.
+# tenacity's message matcher anchors at the start of the message, hence the
+# leading `.*`.
+OPENROUTER_SERVER_TOOL_REQUEST_FAILED: Final[tuple[str, ...]] = (
+    r"(?is).*server tool request failed",
+)
+
 # Minimum context window size required for OpenHands to function properly.
 # Based on typical usage: system prompt (~2k) + conversation history (~4k)
 # + tool definitions (~2k) + working memory (~8k) = ~16k minimum.
@@ -1046,6 +1058,7 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         return self.retry_decorator(
             num_retries=self.num_retries,
             retry_exceptions=LLM_RETRY_EXCEPTIONS,
+            retry_message_patterns=OPENROUTER_SERVER_TOOL_REQUEST_FAILED,
             retry_min_wait=self.retry_min_wait,
             retry_max_wait=self.retry_max_wait,
             retry_multiplier=self.retry_multiplier,

@@ -4,6 +4,7 @@ from typing import Any, cast
 from tenacity import (
     RetryCallState,
     retry,
+    retry_if_exception_message,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -77,6 +78,7 @@ class RetryMixin:
         self,
         num_retries: int = 5,
         retry_exceptions: tuple[type[BaseException], ...] = (LLMNoResponseError,),
+        retry_message_patterns: tuple[str, ...] = (),
         retry_min_wait: int = 8,
         retry_max_wait: int = 64,
         retry_multiplier: float = 2.0,
@@ -85,14 +87,26 @@ class RetryMixin:
         """
         Create a LLM retry decorator with customizable parameters.
         This is used for 429 errors, and a few other exceptions in LLM classes.
+
+        ``retry_message_patterns`` are regex patterns matched against the
+        exception message (via tenacity's ``retry_if_exception_message``).
+        They let callers retry provider errors that surface as a 4xx with a
+        transient server-side cause — e.g. OpenRouter's ``Server tool request
+        failed``, which is an upstream provider failure despite the HTTP 400.
         """
         before_sleep = self._build_before_sleep(num_retries, retry_listener)
+
+        retry_condition = retry_if_exception_type(retry_exceptions)
+        for pattern in retry_message_patterns:
+            retry_condition = retry_condition | retry_if_exception_message(
+                match=pattern
+            )
 
         retry_decorator: Callable[[Callable[..., Any]], Callable[..., Any]] = retry(
             before_sleep=before_sleep,
             stop=stop_after_attempt(num_retries),
             reraise=True,
-            retry=retry_if_exception_type(retry_exceptions),
+            retry=retry_condition,
             wait=wait_exponential(
                 multiplier=retry_multiplier,
                 min=retry_min_wait,
