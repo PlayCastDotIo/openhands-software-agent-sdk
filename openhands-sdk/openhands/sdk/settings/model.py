@@ -1333,7 +1333,7 @@ class OpenHandsAgentSettings(AgentSettingsBase):
     )
 
     subagent_concurrency_limit: int = Field(
-        default=3,
+        default=5,
         ge=1,
         description=(
             "Maximum number of sub-agent tasks (the `task` tool) to run "

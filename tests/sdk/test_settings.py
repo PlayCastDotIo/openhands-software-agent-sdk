@@ -71,6 +71,7 @@ def test_llm_agent_settings_export_schema_groups_sections() -> None:
         "enable_sub_agents",
         "enable_switch_llm_tool",
         "tool_concurrency_limit",
+        "subagent_concurrency_limit",
         "mcp_config",
     }
     assert general_fields["agent"].default == "CodeActAgent"
@@ -86,6 +87,12 @@ def test_llm_agent_settings_export_schema_groups_sections() -> None:
     assert general_fields["enable_switch_llm_tool"].default is True
     assert (
         general_fields["enable_switch_llm_tool"].prominence is SettingProminence.MINOR
+    )
+    assert general_fields["subagent_concurrency_limit"].value_type == "integer"
+    assert general_fields["subagent_concurrency_limit"].default == 5
+    assert (
+        general_fields["subagent_concurrency_limit"].prominence
+        is SettingProminence.MAJOR
     )
     assert general_fields["tool_concurrency_limit"].value_type == "integer"
     assert general_fields["tool_concurrency_limit"].default == 1
@@ -363,6 +370,7 @@ def test_export_agent_settings_schema_emits_variant_tagged_sections() -> None:
         "enable_sub_agents",
         "enable_switch_llm_tool",
         "tool_concurrency_limit",
+        "subagent_concurrency_limit",
         "mcp_config",
     }
     # No agent_kind field — each variant has its own settings page and
