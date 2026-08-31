@@ -10,6 +10,7 @@ a temporary directory, ensuring the state can be restored
 if the task is resumed for further work later.
 """
 
+import contextlib
 import shutil
 import tempfile
 import threading
@@ -30,6 +31,7 @@ from openhands.sdk.conversation.state import (
 )
 from openhands.sdk.conversation.types import TraceMetadataValue
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
+from openhands.sdk.event.llm_convertible.observation import ObservationEvent
 from openhands.sdk.hooks.config import HookConfig
 from openhands.sdk.logger import get_logger
 from openhands.sdk.observability.laminar import detached_delegate_context
@@ -38,7 +40,7 @@ from openhands.sdk.subagent.registry import AgentFactory, get_agent_factory
 
 
 if TYPE_CHECKING:
-    from openhands.sdk.event import ActionEvent
+    from openhands.sdk.event import ActionEvent, Event
 
 ConfirmationHandler = Callable[[str, list["ActionEvent"]], bool]
 
@@ -244,6 +246,7 @@ class TaskManager:
                 conversation,
                 factory.definition.get_confirmation_policy(),
             )
+            self._attach_progress_forwarder(conversation, resume, subagent_type)
 
             self._tasks[resume] = self._tasks[resume].model_copy(
                 update={
@@ -300,6 +303,7 @@ class TaskManager:
                 sub_conversation,
                 factory.definition.get_confirmation_policy(),
             )
+            self._attach_progress_forwarder(sub_conversation, task_id, subagent_type)
 
             self._tasks[task_id] = Task(
                 id=task_id,
@@ -346,6 +350,60 @@ class TaskManager:
                 ),
                 observability_tags=["delegate"],
             )
+
+    def _forward_child_progress(
+        self,
+        task_id: str,
+        subagent: str,
+    ) -> Callable[["Event"], None]:
+        """Return a callback that forwards child activity as parent progress.
+
+        Attached to the child conversation's event stream so each step the
+        sub-agent takes surfaces as a live progress update on the parent. The
+        forwarder runs on the same worker thread that executes the tool, so
+        emitting through ``_emit_progress``' skip-lock guard is safe.
+        """
+
+        def forward(event: "Event") -> None:
+            if not isinstance(event, ObservationEvent):
+                return
+            detail = f"Running: {event.observation.kind}"
+            try:
+                task = self._tasks.get(task_id)
+            except Exception:
+                task = None
+            if task is None:
+                return
+            self._emit_progress(
+                task, subagent=subagent, status="running", detail=detail
+            )
+
+        return forward
+
+    def _attach_progress_forwarder(
+        self,
+        conversation: LocalConversation,
+        task_id: str,
+        subagent: str,
+    ) -> None:
+        """Wrap the child conversation's event emitter to forward progress.
+
+        The child runs on the parent's worker thread, so its observations can be
+        safely re-emitted into the parent's stream as live progress via the same
+        skip-lock path as the terminal task tool. Best-effort: failures never
+        break the delegation.
+        """
+        try:
+            inner = conversation._on_event
+            forward = self._forward_child_progress(task_id, subagent)
+
+            def wrapped(event: "Event") -> None:
+                inner(event)
+                forward(event)
+
+            conversation._on_event = wrapped
+        except Exception as e:
+            logger.warning(f"Failed to attach task progress forwarder: {e}")
 
     def _delegate_observability_metadata(
         self,
@@ -429,6 +487,10 @@ class TaskManager:
         if hasattr(parent, "_visualizer") and parent._visualizer is not None:
             parent_name = getattr(parent._visualizer, "_name", None)
 
+        subagent_name = self._task_subagent_name()
+        self._emit_progress(
+            task, subagent=subagent_name, status="running", detail="Starting sub-agent."
+        )
         try:
             task.conversation.send_message(prompt, sender=parent_name)
             self._run_until_finished(task.id, task.conversation)
@@ -451,6 +513,106 @@ class TaskManager:
             self._evict_task(task)
 
         return task
+
+    def _task_subagent_name(self) -> str:
+        """The configured sub-agent type for the current task (matches the
+        terminal ``TaskObservation.subagent`` value)."""
+        action_event = self._find_task_action_event(self.parent_conversation)
+        if action_event is not None and action_event.action is not None:
+            from openhands.tools.task.definition import TaskAction
+
+            if isinstance(action_event.action, TaskAction):
+                return action_event.action.subagent_type
+        return "sub-agent"
+
+    @staticmethod
+    def _build_thread(conversation: LocalConversation) -> list[dict[str, str]]:
+        """Compact transcript of a sub-agent run for inline thread rendering.
+
+        Ordered ``{role, text}`` entries: assistant messages and tool
+        observations. Tool calls are skipped (their result observation carries
+        the useful text); user messages are the delegated prompt, which the card
+        already shows. Best-effort: unreadable events are dropped.
+        """
+        from openhands.sdk.event import MessageEvent
+        from openhands.sdk.event.llm_convertible.observation import ObservationEvent
+
+        thread: list[dict[str, str]] = []
+        for event in conversation.state.events:
+            try:
+                if isinstance(event, MessageEvent) and event.source == "agent":
+                    text = " ".join(
+                        c.text for c in event.llm_message.content if c.type == "text"
+                    ).strip()
+                    if text:
+                        thread.append({"role": "assistant", "text": text})
+                elif isinstance(event, ObservationEvent):
+                    text = " ".join(
+                        c.text for c in event.observation.content if c.type == "text"
+                    ).strip()
+                    if text:
+                        thread.append({"role": "tool", "text": text})
+            except Exception:
+                continue
+        return thread
+
+    def _emit_progress(
+        self,
+        task: Task,
+        *,
+        subagent: str,
+        status: str,
+        detail: str,
+    ) -> None:
+        """Emit a ``TaskProgressObservation`` into the parent conversation.
+
+        The tool executor runs on a worker thread while the parent's run loop
+        holds the state lock across ``agent.step()``; emitting through
+        ``_on_event`` re-acquires it and would deadlock. Mirror switch_llm's
+        skip-lock guard: the run loop is parked awaiting this tool, so appending
+        without the lock is safe (#3485). Falls back to appending under the lock
+        when the caller already owns it (sync step / reentrant).
+        """
+        try:
+            from openhands.tools.task.definition import TaskProgressObservation
+
+            parent = self.parent_conversation
+            action_event = self._find_task_action_event(parent)
+            if action_event is None:
+                return
+            obs_event = ObservationEvent(
+                observation=TaskProgressObservation.from_text(
+                    text="",
+                    task_id=task.id,
+                    subagent=subagent,
+                    status=status,
+                    detail=detail,
+                    conversation_id=str(task.conversation.state.id)
+                    if task.conversation is not None
+                    else None,
+                ),
+                action_id=action_event.id,
+                tool_name="task",
+                tool_call_id=action_event.tool_call.id,
+            )
+            skip_lock = parent._step_holds_state_lock and not parent._state.owned()
+            with contextlib.nullcontext() if skip_lock else parent._state:
+                parent._on_event(obs_event)
+        except Exception as e:
+            logger.warning(f"Failed to emit task progress: {e}")
+
+    @staticmethod
+    def _find_task_action_event(parent: LocalConversation) -> "ActionEvent | None":
+        """Find the parent's in-flight ``TaskAction`` event to link progress to."""
+        from openhands.sdk.event import ActionEvent
+
+        for event in reversed(parent.state.events):
+            if isinstance(event, ActionEvent) and event.action is not None:
+                from openhands.tools.task.definition import TaskAction
+
+                if event.action.kind == TaskAction.__name__:
+                    return event
+        return None
 
     @staticmethod
     def _run_stop_detail(

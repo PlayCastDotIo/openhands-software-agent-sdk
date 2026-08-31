@@ -11,7 +11,7 @@ from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.logger import get_logger
 from openhands.sdk.tool.tool import ToolExecutor
 from openhands.tools.task.definition import TaskAction, TaskObservation
-from openhands.tools.task.manager import TaskManager, TaskStatus
+from openhands.tools.task.manager import Task, TaskManager, TaskStatus
 
 
 logger = get_logger(__name__)
@@ -44,6 +44,8 @@ class TaskExecutor(ToolExecutor):
                         task_id=task.id,
                         subagent=action.subagent_type,
                         status=task.status,
+                        conversation_id=self._conversation_id(task),
+                        thread=self._thread(task),
                     )
                 case TaskStatus.ERROR:
                     return TaskObservation.from_text(
@@ -52,6 +54,8 @@ class TaskExecutor(ToolExecutor):
                         subagent=action.subagent_type,
                         status=task.status,
                         is_error=True,
+                        conversation_id=self._conversation_id(task),
+                        thread=self._thread(task),
                     )
                 case _:
                     # this should never happen
@@ -65,6 +69,20 @@ class TaskExecutor(ToolExecutor):
                 status="error",
                 is_error=True,
             )
+
+    @staticmethod
+    def _conversation_id(task: Task) -> str | None:
+        """The sub-agent conversation's id, when the task ran one."""
+        if task.conversation is None:
+            return None
+        return str(task.conversation.state.id)
+
+    @staticmethod
+    def _thread(task: Task) -> list[dict[str, str]]:
+        """Compact transcript of the sub-agent run, when available."""
+        if task.conversation is None:
+            return []
+        return TaskManager._build_thread(task.conversation)
 
     def close(self) -> None:
         self._manager.close()

@@ -78,6 +78,18 @@ class TaskObservation(Observation):
     task_id: str = Field(description="The unique identifier of the task.")
     subagent: str = Field(description="The subagent of the task.")
     status: str = Field(description="The status of the task.")
+    conversation_id: str | None = Field(
+        default=None,
+        description="The sub-agent conversation's id, when the task ran one.",
+    )
+    thread: list[dict[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "Compact transcript of the sub-agent's run: ordered "
+            "{role, text} entries (assistant messages and tool observations). "
+            "Empty when the task produced no readable output."
+        ),
+    )
 
     def _get_task_info(self) -> str:
         return (
@@ -115,6 +127,43 @@ class TaskObservation(Observation):
         llm_content.extend(self.content)
 
         return llm_content
+
+
+class TaskProgressObservation(Observation):
+    """Live progress update emitted while a sub-agent task runs.
+
+    The terminal result is still delivered by :class:`TaskObservation`; this
+    observation is a best-effort status push (task started, subagent steps,
+    etc.) so consumers can render a running card without waiting for the end.
+    """
+
+    task_id: str = Field(description="The unique identifier of the task.")
+    subagent: str = Field(description="The subagent of the task.")
+    status: str = Field(
+        default="running",
+        description="Lifecycle status of the task (e.g. 'running').",
+    )
+    detail: str = Field(
+        default="",
+        description="Human-readable detail describing what the subagent is doing.",
+    )
+    conversation_id: str | None = Field(
+        default=None,
+        description="The sub-agent conversation's id, when the task ran one.",
+    )
+
+    @property
+    def to_llm_content(self) -> Sequence[TextContent | ImageContent]:
+        """Progress is a UI concern; do not feed it back to the parent LLM."""
+        return [TextContent(text="")]
+
+    @property
+    def visualize(self) -> Text:
+        text = Text()
+        text.append(f"Task ID: {self.task_id} — {self.status}", style="blue")
+        text.append("\n")
+        text.append(self.detail)
+        return text
 
 
 TASK_TOOL_DESCRIPTION: Final[

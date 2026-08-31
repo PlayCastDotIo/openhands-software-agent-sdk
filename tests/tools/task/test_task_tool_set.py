@@ -7,7 +7,11 @@ from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.subagent.registry import _reset_registry_for_tests, register_agent
 from openhands.sdk.testing import TestLLM
 from openhands.tools.task import TaskToolSet
-from openhands.tools.task.definition import TASK_TOOL_EXAMPLES, TaskObservation
+from openhands.tools.task.definition import (
+    TASK_TOOL_EXAMPLES,
+    TaskObservation,
+    TaskProgressObservation,
+)
 from openhands.tools.task.manager import TaskStatus
 
 
@@ -67,6 +71,19 @@ def _get_task_observations(conversation: LocalConversation) -> list[TaskObservat
     return results
 
 
+def _get_task_progress_observations(
+    conversation: LocalConversation,
+) -> list[TaskProgressObservation]:
+    """Extract all TaskProgressObservation objects from conversation events."""
+    results = []
+    for event in conversation.state.events:
+        if isinstance(event, ObservationEvent) and isinstance(
+            event.observation, TaskProgressObservation
+        ):
+            results.append(event.observation)
+    return results
+
+
 class TestTaskToolSetIntegration:
     """Tests for the TaskToolSet."""
 
@@ -116,6 +133,48 @@ class TestTaskToolSetIntegration:
         assert obs.task_id.startswith("task_")
         assert obs.subagent == "test_agent"
         assert "Paris" in obs.text
+
+    def test_task_delegation_emits_progress(self, tmp_path):
+        """A running task surfaces live TaskProgressObservation on the parent."""
+        parent_llm = TestLLM.from_messages(
+            [
+                _task_tool_call("call_1", prompt="Do the thing."),
+                _text_message("Done."),
+            ]
+        )
+        sub_llm = TestLLM.from_messages(
+            [
+                _text_message("I did the thing."),
+            ]
+        )
+        _register_simple_agent("test_agent", sub_llm)
+
+        agent = Agent(llm=parent_llm, tools=[Tool(name=TaskToolSet.name)])
+        conversation = Conversation(
+            agent=agent, workspace=str(tmp_path), visualizer=None
+        )
+
+        conversation.send_message("Do the thing.")
+        conversation.run()
+
+        assert (
+            conversation.state.execution_status == ConversationExecutionStatus.FINISHED
+        )
+
+        progress = _get_task_progress_observations(conversation)
+        assert len(progress) >= 1
+        assert progress[0].status == "running"
+        assert progress[0].task_id == _get_task_observations(conversation)[0].task_id
+        assert progress[0].subagent == "test_agent"
+
+        # Terminal observation still present and replaces progress on the card.
+        observations = _get_task_observations(conversation)
+        assert len(observations) == 1
+        assert observations[0].status == TaskStatus.COMPLETED
+        # The sub-agent's conversation id and transcript are exposed for the
+        # inline thread view.
+        assert observations[0].conversation_id is not None
+        assert any(entry["role"] == "assistant" for entry in observations[0].thread)
 
     # ── Multiple sequential tasks ───────────────────────────────────
 
