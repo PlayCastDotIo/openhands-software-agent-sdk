@@ -74,6 +74,41 @@ def test_mcp_tool_serialization():
     assert loaded.model_dump_json() == dumped
 
 
+def test_mcp_tool_migrates_snake_case_from_mcp_2_x() -> None:
+    """A persisted mcp_tool written by mcp 2.x (snake_case) loads under 1.x.
+
+    mcp 2.x serialized mcp.types.Tool with snake_case field names
+    (input_schema/output_schema/read_only_hint). The perdix wheels pin mcp 1.x,
+    which expects camelCase and would otherwise 500 on resume because
+    inputSchema is required. The MCPToolDefinition validator maps the old keys
+    onto the new ones.
+    """
+    payload = {
+        "name": "find_organizations",
+        "description": "Find organizations",
+        "mcp_tool": {
+            "name": "find_organizations",
+            "description": "Find organizations",
+            "input_schema": {"type": "object", "properties": {}},
+            "output_schema": {"type": "object", "properties": {}},
+            "annotations": {
+                "read_only_hint": True,
+                "destructive_hint": False,
+                "open_world_hint": True,
+            },
+        },
+        "action_type": "MCPToolAction",
+        "observation_type": "MCPToolObservation",
+        "tool_name": "find_organizations",
+    }
+    tool = MCPToolDefinition.model_validate(payload)
+    assert tool.mcp_tool.inputSchema == {"type": "object", "properties": {}}
+    assert tool.mcp_tool.outputSchema == {"type": "object", "properties": {}}
+    assert tool.mcp_tool.annotations is not None
+    assert tool.mcp_tool.annotations.readOnlyHint is True
+    assert tool.mcp_tool.annotations.openWorldHint is True
+
+
 def test_agent_serialization_redacts_mcp_config_by_default() -> None:
     """MCP SecretStr values are redacted during default serialization."""
     llm = LLM(model="test-model", usage_id="test-llm")

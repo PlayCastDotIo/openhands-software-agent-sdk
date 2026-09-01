@@ -5,7 +5,7 @@ import json
 import re
 import threading
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 import mcp.types
 from litellm import ChatCompletionToolParam
 from openai.types.responses import FunctionToolParam
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from openhands.sdk.llm import TextContent
 from openhands.sdk.logger import get_logger
@@ -243,6 +243,43 @@ class MCPToolDefinition(ToolDefinition[MCPToolAction, MCPToolObservation]):
     """MCP Tool that wraps an MCP client and provides tool functionality."""
 
     mcp_tool: mcp.types.Tool = Field(description="The MCP tool definition.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_snake_case_mcp_tool(cls, data: Any) -> Any:
+        """Normalize a persisted ``mcp_tool`` written by mcp 2.x back to 1.x.
+
+        mcp 2.x serialized ``mcp.types.Tool`` using snake_case field names
+        (``input_schema`` / ``output_schema`` / read_only_hint ...), while
+        mcp 1.x (which the perdix wheels pin) uses camelCase (``inputSchema`` /
+        ``outputSchema``). Conversations persisted under the 2.x resolution
+        therefore fail to load under 1.x: ``inputSchema`` is required but
+        missing. Map the snake_case keys onto the camelCase ones on read so old
+        conversations resume instead of 500-ing.
+        """
+        if not isinstance(data, Mapping):
+            return data
+        mcp_tool = data.get("mcp_tool")
+        if not isinstance(mcp_tool, Mapping):
+            return data
+        normalized = dict(mcp_tool)
+        if "input_schema" in normalized and "inputSchema" not in normalized:
+            normalized["inputSchema"] = normalized.pop("input_schema")
+        if "output_schema" in normalized and "outputSchema" not in normalized:
+            normalized["outputSchema"] = normalized.pop("output_schema")
+        annotations = normalized.get("annotations")
+        if isinstance(annotations, Mapping):
+            ann = dict(annotations)
+            for snake, camel in (
+                ("read_only_hint", "readOnlyHint"),
+                ("destructive_hint", "destructiveHint"),
+                ("idempotent_hint", "idempotentHint"),
+                ("open_world_hint", "openWorldHint"),
+            ):
+                if snake in ann and camel not in ann:
+                    ann[camel] = ann.pop(snake)
+            normalized["annotations"] = ann
+        return {**data, "mcp_tool": normalized}
 
     @property
     def name(self) -> str:  # type: ignore[override]
