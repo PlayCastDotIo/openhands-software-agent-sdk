@@ -185,7 +185,20 @@ DEFAULT_MAX_OUTPUT_TOKENS_CAP: Final[int] = 16384
 # ``max_output_tokens`` -- e.g. 64k for Sonnet 4.5) cannot push large-input
 # requests past the context window. See BerriAI/litellm#17900 for the upstream
 # default change that made this manifest.
+# The fixed floor on the safety reserve, in tokens. Applied even for tiny
+# inputs so we always leave *some* headroom.
 JOINT_BUDGET_SAFETY_MARGIN_TOKENS: Final[int] = 256
+# Proportional safety reserve: the SDK's input-token estimate is a local
+# tokenizer count that can drift from what the provider actually charges
+# (OpenRouter routes to arbitrary upstream models, each with its own
+# tokenizer, and adds its own formatting). The drift grows with input size
+# (e.g. a ~0.05% undercount at 500k input is ~280 tokens), so a fixed margin
+# alone is not enough at large inputs. Reserve an additional fraction of the
+# estimated input so the clamped output budget cannot push the *provider's*
+# true ``input + max_tokens`` past the window. 2% comfortably covers
+# tokenizer/model drift while still leaving the vast majority of the window
+# available for output.
+JOINT_BUDGET_PROPORTIONAL_MARGIN: Final[float] = 0.02
 JOINT_BUDGET_MIN_OUTPUT_TOKENS: Final[int] = 1024
 # Provider name prefixes known to enforce a joint input/output token budget.
 # Kept as a narrow allowlist so direct providers (Anthropic, OpenAI, etc.) --
@@ -2398,7 +2411,11 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
             )
             return call_kwargs
 
-        headroom = context_window - input_tokens - JOINT_BUDGET_SAFETY_MARGIN_TOKENS
+        safety_reserve = max(
+            JOINT_BUDGET_SAFETY_MARGIN_TOKENS,
+            round(input_tokens * JOINT_BUDGET_PROPORTIONAL_MARGIN),
+        )
+        headroom = context_window - input_tokens - safety_reserve
         clamped = max(min(current_budget, headroom), JOINT_BUDGET_MIN_OUTPUT_TOKENS)
 
         if clamped >= current_budget:

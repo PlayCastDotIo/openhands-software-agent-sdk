@@ -19,8 +19,16 @@ from pydantic import SecretStr
 from openhands.sdk.llm import LLM, Message, TextContent
 from openhands.sdk.llm.llm import (
     JOINT_BUDGET_MIN_OUTPUT_TOKENS,
+    JOINT_BUDGET_PROPORTIONAL_MARGIN,
     JOINT_BUDGET_SAFETY_MARGIN_TOKENS,
 )
+
+
+def _safety_reserve(input_tokens: int) -> int:
+    return max(
+        JOINT_BUDGET_SAFETY_MARGIN_TOKENS,
+        round(input_tokens * JOINT_BUDGET_PROPORTIONAL_MARGIN),
+    )
 
 
 def _make_llm(model: str, *, max_input_tokens: int = 200_000) -> LLM:
@@ -44,8 +52,8 @@ def test_bedrock_clamps_max_tokens_when_input_is_large():
     with patch("openhands.sdk.llm.llm.token_counter", return_value=195_000):
         out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
 
-    # Headroom = 200_000 - 195_000 - 256 = 4_744; well above the floor.
-    expected = 200_000 - 195_000 - JOINT_BUDGET_SAFETY_MARGIN_TOKENS
+    # Headroom = 200_000 - 195_000 - reserve; well above the floor.
+    expected = 200_000 - 195_000 - _safety_reserve(195_000)
     assert out["max_completion_tokens"] == expected
     assert out["max_completion_tokens"] < 64_000
 
@@ -98,7 +106,7 @@ def test_clamps_max_tokens_key_too():
         out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
 
     assert "max_completion_tokens" not in out
-    assert out["max_tokens"] == 200_000 - 195_000 - JOINT_BUDGET_SAFETY_MARGIN_TOKENS
+    assert out["max_tokens"] == 200_000 - 195_000 - _safety_reserve(195_000)
 
 
 def test_no_clamp_when_no_budget_key_present():
@@ -117,12 +125,30 @@ def test_user_supplied_smaller_budget_is_preserved():
     llm = _make_llm("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0")
     call_kwargs = {"max_completion_tokens": 2_000}
 
-    # 195k input + user-supplied 2k output = 197k, still fits the 200k window
-    # after the safety margin. Should not be clamped.
-    with patch("openhands.sdk.llm.llm.token_counter", return_value=195_000):
+    # Small input: 50k input + 2k output leaves plenty of headroom after the
+    # proportional reserve, so a caller-supplied budget is left untouched.
+    with patch("openhands.sdk.llm.llm.token_counter", return_value=50_000):
         out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
 
     assert out["max_completion_tokens"] == 2_000
+
+
+def test_user_supplied_budget_clamped_when_input_leaves_little_headroom():
+    """A caller-supplied budget that exceeds the remaining safe headroom is clamped.
+
+    The proportional reserve (2% of the input estimate) absorbs tokenizer/model
+    drift between the SDK's local count and what the provider actually charges
+    (e.g. a ~0.05% undercount at 500k input is ~280 tokens). At 195k input the
+    reserve is ~3,900 tokens, so a 2k output budget that once fit under a fixed
+    256-token margin no longer does.
+    """
+    llm = _make_llm("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    call_kwargs = {"max_completion_tokens": 2_000}
+
+    with patch("openhands.sdk.llm.llm.token_counter", return_value=195_000):
+        out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
+
+    assert out["max_completion_tokens"] == 200_000 - 195_000 - _safety_reserve(195_000)
 
 
 def test_clamp_skipped_when_token_counter_raises():
@@ -166,7 +192,7 @@ def test_finalize_completion_params_applies_clamp_end_to_end():
     assert budget is not None
     assert budget < 64_000
     # Should have clamped to headroom (well above floor for 195k input).
-    assert budget == 200_000 - 195_000 - JOINT_BUDGET_SAFETY_MARGIN_TOKENS
+    assert budget == 200_000 - 195_000 - _safety_reserve(195_000)
 
 
 def test_no_clamp_when_context_window_unknown():
@@ -201,7 +227,7 @@ def test_openrouter_clamps_huge_output_budget_to_headroom():
     with patch("openhands.sdk.llm.llm.token_counter", return_value=50_000):
         out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
 
-    expected = 1_000_000 - 50_000 - JOINT_BUDGET_SAFETY_MARGIN_TOKENS
+    expected = 1_000_000 - 50_000 - _safety_reserve(50_000)
     assert out["max_completion_tokens"] == expected
     assert out["max_completion_tokens"] < 1_000_000
 
@@ -215,3 +241,32 @@ def test_openrouter_small_output_budget_is_preserved():
         out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
 
     assert out["max_completion_tokens"] == 8_000
+
+
+def test_openrouter_large_input_reserve_absorbs_tokenizer_drift():
+    """The proportional reserve covers provider tokenizer/model undercounts.
+
+    Reproduces the reported production failure: the SDK's local token count
+    (~534.7k) was ~280 tokens under what OpenRouter actually charged
+    (534,938) at a 1,048,576-token window, so the old fixed 256-token margin
+    left exactly the provider's input+max_tokens 27 tokens past the limit
+    (1,048,603 > 1,048,576). The 2% proportional reserve must leave enough
+    headroom that even a drifted input count fits within the window.
+    """
+    llm = _make_llm("openrouter/@preset/flash", max_input_tokens=1_048_576)
+    call_kwargs = {"max_completion_tokens": 1_000_000}
+    sdk_input_estimate = 534_655
+    provider_actual_input = 534_938
+
+    with patch("openhands.sdk.llm.llm.token_counter", return_value=sdk_input_estimate):
+        out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
+
+    clamped = out["max_completion_tokens"]
+    # The clamped output must be safe even if the provider counts more input
+    # tokens than the SDK estimated (the exact drift from the reported bug).
+    assert provider_actual_input + clamped <= 1_048_576, (
+        f"clamped {clamped} with provider input {provider_actual_input} "
+        f"exceeds the 1,048,576 window"
+    )
+    # And it must still reserve a comfortable margin on top of the actual count.
+    assert provider_actual_input + clamped < 1_048_576 - 500
