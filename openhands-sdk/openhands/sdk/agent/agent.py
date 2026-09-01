@@ -793,7 +793,9 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                 and self.condenser.handles_condensation_requests()
             ):
                 logger.warning(
-                    "LLM raised context window exceeded error, triggering condensation"
+                    "LLM raised context window exceeded error, triggering "
+                    "condensation: %s",
+                    e,
                 )
                 on_event(CondensationRequest())
                 return
@@ -993,7 +995,9 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                 and self.condenser.handles_condensation_requests()
             ):
                 logger.warning(
-                    "LLM raised context window exceeded error, triggering condensation"
+                    "LLM raised context window exceeded error, triggering "
+                    "condensation: %s",
+                    e,
                 )
                 on_event(CondensationRequest())
                 return
