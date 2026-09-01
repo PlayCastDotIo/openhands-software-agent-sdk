@@ -360,6 +360,20 @@ class LLMProfileStore:
         if api_key is not None:
             from pydantic import SecretStr
 
+            # A connection-backed profile owns no inline key, so an api_key
+            # that is still a Fernet ciphertext here means the cipher never
+            # decrypted it (OH_SECRET_KEY unset or mismatched). Installing it
+            # verbatim would silently break auth on the switched LLM, so fail
+            # the switch loudly instead of dropping the token.
+            from openhands.sdk.utils.cipher import FERNET_TOKEN_PREFIX
+
+            if api_key.startswith(FERNET_TOKEN_PREFIX):
+                raise ValueError(
+                    f"Provider connection {connection_id!r} for profile "
+                    f"{profile_name!r} has an encrypted api_key that could not "
+                    "be decrypted. Verify that OH_SECRET_KEY matches the key "
+                    "used when the connection was saved."
+                )
             updates["api_key"] = SecretStr(api_key)
         return llm.model_copy(update=updates)
 

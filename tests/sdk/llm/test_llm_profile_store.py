@@ -787,3 +787,50 @@ def test_default_provider_store_is_sibling_of_base_dir(tmp_path: Path) -> None:
     resolved = store.load("linked")
     assert isinstance(resolved.api_key, SecretStr)
     assert resolved.api_key.get_secret_value() == "sk-shared"
+
+
+def test_linked_profile_with_undecryptable_connection_key_fails_loudly(
+    tmp_path: Path,
+) -> None:
+    """A connection api_key that is still Fernet-encrypted must not be installed.
+
+    A connection-backed profile owns no inline key, so if the connection's
+    stored api_key comes back as ciphertext (OH_SECRET_KEY unset or mismatched
+    at load time), installing it verbatim would silently break auth on the
+    switched LLM. Resolving such a profile must raise instead of dropping the
+    token.
+    """
+    from openhands.sdk.llm.provider_connection_store import (
+        ProviderConnection,
+        ProviderConnectionStore,
+    )
+    from openhands.sdk.utils.cipher import Cipher
+
+    store = LLMProfileStore(base_dir=tmp_path)
+    provider_store = ProviderConnectionStore(
+        base_dir=tmp_path.parent / "provider-connections"
+    )
+    now = 1_000
+    # A real Fernet ciphertext, but no cipher is provided at load time — the
+    # same shape as reading a connection that OH_SECRET_KEY cannot decrypt.
+    encrypted = Cipher(secret_key="some-secret").encrypt(SecretStr("sk-secret"))
+    assert encrypted is not None
+    provider_store.create(
+        ProviderConnection(
+            id="conn1",
+            display_name="Anthropic",
+            provider="anthropic",
+            api_key=SecretStr(encrypted),
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    llm = LLM(
+        usage_id="linked",
+        model="anthropic/claude-sonnet-4",
+        provider_connection_id="conn1",
+    )
+    store.save("linked", llm)
+
+    with pytest.raises(ValueError, match="could not be decrypted"):
+        store.load("linked")
