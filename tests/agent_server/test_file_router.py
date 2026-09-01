@@ -89,6 +89,33 @@ def test_upload_file_query_param_relative_path_fails(client):
     assert "must be absolute" in response.json()["detail"]
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="POSIX /tmp paths are already absolute on POSIX hosts",
+)
+def test_upload_file_posix_tmp_path_resolves_on_windows(client, tmp_path):
+    """A POSIX ``/tmp/...`` path must not 400 on a Windows agent-server.
+
+    The automation dispatcher uploads its staging tarball to
+    ``/api/file/upload?path=/tmp/automation-<id>.tar.gz`` regardless of host
+    OS. On Windows ``Path("/tmp/x").is_absolute()`` is False (no drive), which
+    previously failed every automation run with "Path must be absolute". The
+    path is anchored in the host temp dir so cross-platform callers work.
+    """
+    response = client.post(
+        "/api/file/upload",
+        params={"path": "/tmp/automation-abc123.tar.gz"},
+        files={"file": ("t.tar.gz", io.BytesIO(b"staged"), "application/gzip")},
+    )
+
+    assert response.status_code == 200, response.text
+    expected = Path(tempfile.gettempdir()) / "tmp" / "automation-abc123.tar.gz"
+    assert expected.exists()
+    assert expected.read_bytes() == b"staged"
+    # Clean up the staging artifact so the test leaves no residue.
+    expected.unlink(missing_ok=True)
+
+
 def test_upload_file_query_param_missing_path(client):
     """Test that upload without path parameter returns 422."""
     response = client.post(

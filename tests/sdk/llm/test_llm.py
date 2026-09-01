@@ -106,6 +106,43 @@ def test_openhands_provider_translates_only_for_litellm(mock_completion, mock_ge
     assert "base_url" not in persisted
 
 
+def test_display_description_fields_round_trip_through_persisted():
+    """Description/long_description are display metadata that persist and reload."""
+    llm = LLM(
+        model="openrouter/@preset/flash",
+        api_key=SecretStr("test-key"),
+        usage_id="test-display-meta",
+        description="Fast everyday agent",
+        long_description="The cheap, fast preset for everyday conversations.",
+    )
+
+    persisted = llm.to_persisted()
+    assert persisted["description"] == "Fast everyday agent"
+    assert (
+        persisted["long_description"]
+        == "The cheap, fast preset for everyday conversations."
+    )
+
+    reloaded = LLM.model_validate(persisted)
+    assert reloaded.description == "Fast everyday agent"
+    assert (
+        reloaded.long_description
+        == "The cheap, fast preset for everyday conversations."
+    )
+
+
+def test_display_description_fields_default_to_none():
+    llm = LLM(
+        model="openrouter/@preset/flash",
+        api_key=SecretStr("test-key"),
+        usage_id="test-display-meta-default",
+    )
+    assert llm.description is None
+    assert llm.long_description is None
+    assert "description" not in llm.to_persisted()
+    assert "long_description" not in llm.to_persisted()
+
+
 @patch("openhands.sdk.llm.utils.model_info.httpx.get")
 def test_kimi_k2_5_uses_provider_defaults(mock_get):
     """Test that kimi-k2.5 uses provider defaults (None) for temperature and top_p."""

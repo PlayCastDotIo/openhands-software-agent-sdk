@@ -65,12 +65,35 @@ logger = get_logger(__name__)
 file_router = APIRouter(prefix="/file", tags=["Files"])
 
 
+def _resolve_upload_path(path: str) -> Path:
+    """Resolve a caller-supplied path to an absolute host path.
+
+    Callers (e.g. the automation dispatcher) commonly pass POSIX-style
+    absolute paths such as ``/tmp/automation-<id>.tar.gz`` regardless of the
+    agent-server's host OS. On Windows ``Path("/tmp/x").is_absolute()`` is
+    ``False`` (no drive letter), which would make those callers 400 with
+    "Path must be absolute". Map a POSIX ``/tmp/<name>`` path to the host's
+    temp directory so cross-platform callers work unchanged; other paths pass
+    through and the existing absolute check still applies.
+    """
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    if os.name == "nt" and candidate.parts and candidate.parts[0] == "\\":
+        # A leading-slash path (e.g. ``/tmp/x`` -> ``\tmp\x``) is relative on
+        # Windows. ``/tmp/...`` is a staging artifact, so anchor it in the
+        # system temp dir just like POSIX.
+        rest = Path(*candidate.parts[1:]) if len(candidate.parts) > 1 else Path()
+        return Path(tempfile.gettempdir()) / rest
+    return candidate
+
+
 async def _upload_file(path: str, file: UploadFile) -> Success:
     """Internal helper to upload a file to the workspace."""
     update_last_execution_time()
     logger.info(f"Uploading file: {path}")
     try:
-        target_path = Path(path)
+        target_path = _resolve_upload_path(path)
         if not target_path.is_absolute():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -106,7 +129,7 @@ async def _download_file(path: str) -> FileResponse:
     update_last_execution_time()
     logger.info(f"Downloading file: {path}")
     try:
-        target_path = Path(path)
+        target_path = _resolve_upload_path(path)
         if not target_path.is_absolute():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -676,7 +699,7 @@ async def create_directory(
     update_last_execution_time()
     logger.info(f"Creating directory: {path}")
 
-    target_path = Path(path)
+    target_path = _resolve_upload_path(path)
     if not target_path.is_absolute():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

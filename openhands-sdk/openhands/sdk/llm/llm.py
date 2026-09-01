@@ -434,6 +434,22 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         ),
         json_schema_extra=field_meta(),
     )
+    description: str | None = Field(
+        default=None,
+        description=(
+            "Optional short human-readable description of the model, shown in "
+            "UIs (e.g. a profile switcher) in place of the raw model slug. "
+            "Display metadata only — never sent to the provider."
+        ),
+    )
+    long_description: str | None = Field(
+        default=None,
+        description=(
+            "Optional longer human-readable description of the model, shown in "
+            "UIs (e.g. a profile switcher tooltip). Display metadata only — "
+            "never sent to the provider."
+        ),
+    )
     api_mode: Literal["auto", "chat", "responses"] = Field(
         default="auto",
         description=(
