@@ -44,6 +44,7 @@ from openhands.agent_server.models import (
     UpdateSecretsRequest,
     trim_conversation_response_skills,
 )
+from openhands.agent_server.persistence import get_llm_profile_store
 from openhands.sdk import LLM, Agent, TextContent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.marketplace.registry import (
@@ -510,6 +511,21 @@ async def switch_conversation_llm(
     cipher = get_cipher(request)
     if cipher is not None:
         llm = decrypt_incoming_llm_secrets(llm, cipher)
+    # A caller-supplied config may reference a provider connection (the
+    # profile GET used by the UI resolves provider=False, so it carries
+    # provider_connection_id but no inline key). Resolve those credentials
+    # here or the swapped-in LLM would have no auth and every subsequent
+    # request would 401.
+    if llm.provider_connection_id:
+        try:
+            llm = get_llm_profile_store().resolve_provider_credentials(
+                llm, cipher=cipher
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            ) from e
     conversation.switch_llm(llm)
     return Success()
 

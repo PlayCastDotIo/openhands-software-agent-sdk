@@ -312,6 +312,24 @@ class LLMProfileStore:
             )
         return llm_instance
 
+    def resolve_provider_credentials(
+        self,
+        llm: LLM,
+        *,
+        cipher: Cipher | None,
+    ) -> LLM:
+        """Apply a referenced provider connection's credentials to a raw LLM.
+
+        Used by callers that install a caller-supplied LLM directly (e.g. the
+        agent-server's ``/switch_llm`` endpoint) rather than loading a saved
+        profile: a connection-backed config carries ``provider_connection_id``
+        but no inline key, so its credentials must be resolved here or the
+        installed LLM would have no auth.
+        """
+        if not llm.provider_connection_id or self._provider_store is None:
+            return llm
+        return self._resolve_provider_connection("<llm>", llm, cipher=cipher)
+
     def _resolve_provider_connection(
         self, profile_name: str, llm: LLM, *, cipher: Cipher | None
     ) -> LLM:

@@ -2465,6 +2465,71 @@ def test_switch_conversation_llm_plaintext_with_cipher_passes_through(
         client.app.dependency_overrides.clear()
 
 
+def test_switch_conversation_llm_resolves_provider_connection(
+    client,
+    mock_conversation_service,
+    mock_event_service,
+    sample_conversation_id,
+    tmp_path,
+    monkeypatch,
+):
+    """A connection-backed LLM posted to /switch_llm must get its credentials.
+
+    The UI forwards the profile config (provider_connection_id, no inline
+    key), so the router must resolve the connection or the swapped-in LLM has
+    no auth and every subsequent request 401s with "No cookie auth
+    credentials found".
+    """
+    from openhands.sdk.llm.provider_connection_store import (
+        ProviderConnection,
+    )
+
+    store = LLMProfileStore(base_dir=tmp_path / "profiles")
+    connections = store._provider_store
+    assert connections is not None
+    connections.create(
+        ProviderConnection(
+            id="conn1",
+            display_name="OpenRouter",
+            provider="openrouter",
+            api_key=SecretStr("sk-shared"),
+            created_at=1_000,
+            updated_at=1_000,
+        )
+    )
+    monkeypatch.setattr(
+        "openhands.agent_server.conversation_router.get_llm_profile_store",
+        lambda: store,
+    )
+
+    mock_conversation = MagicMock()
+    mock_conversation_service.get_event_service.return_value = mock_event_service
+    mock_event_service.get_conversation.return_value = mock_conversation
+    client.app.dependency_overrides[get_conversation_service] = lambda: (
+        mock_conversation_service
+    )
+
+    try:
+        response = client.post(
+            f"/api/conversations/{sample_conversation_id}/switch_llm",
+            json={
+                "llm": {
+                    "model": "openrouter/@preset/vision",
+                    "provider_connection_id": "conn1",
+                    "usage_id": "caller-supplied-id",
+                }
+            },
+        )
+
+        assert response.status_code == 200
+        forwarded_llm = mock_conversation.switch_llm.call_args.args[0]
+        assert isinstance(forwarded_llm, LLM)
+        assert isinstance(forwarded_llm.api_key, SecretStr)
+        assert forwarded_llm.api_key.get_secret_value() == "sk-shared"
+    finally:
+        client.app.dependency_overrides.clear()
+
+
 def test_switch_conversation_llm_not_found(
     client, mock_conversation_service, sample_conversation_id
 ):
