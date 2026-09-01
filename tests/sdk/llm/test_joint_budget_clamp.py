@@ -184,3 +184,34 @@ def test_no_clamp_when_context_window_unknown():
         out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
 
     assert out["max_completion_tokens"] == 64_000
+
+
+def test_openrouter_clamps_huge_output_budget_to_headroom():
+    """OpenRouter shares one window between input and requested output.
+
+    A catalog ``max_output_tokens`` equal to the full context (1M) combined
+    with ~50k of real input exceeds the 1.048M endpoint window on every
+    request (``input + max_tokens > context``), surfacing as repeated 400s
+    that the agent misreads as context exhaustion. The request-time clamp must
+    pull the output budget back to the remaining headroom.
+    """
+    llm = _make_llm("openrouter/@preset/flash", max_input_tokens=1_000_000)
+    call_kwargs = {"max_completion_tokens": 1_000_000}
+
+    with patch("openhands.sdk.llm.llm.token_counter", return_value=50_000):
+        out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
+
+    expected = 1_000_000 - 50_000 - JOINT_BUDGET_SAFETY_MARGIN_TOKENS
+    assert out["max_completion_tokens"] == expected
+    assert out["max_completion_tokens"] < 1_000_000
+
+
+def test_openrouter_small_output_budget_is_preserved():
+    """OpenRouter with a modest output budget that fits stays unchanged."""
+    llm = _make_llm("openrouter/@preset/flash", max_input_tokens=1_000_000)
+    call_kwargs = {"max_completion_tokens": 8_000}
+
+    with patch("openhands.sdk.llm.llm.token_counter", return_value=50_000):
+        out = llm._clamp_max_tokens_for_joint_budget(call_kwargs, [], [])
+
+    assert out["max_completion_tokens"] == 8_000

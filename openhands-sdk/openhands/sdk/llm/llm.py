@@ -192,8 +192,14 @@ JOINT_BUDGET_MIN_OUTPUT_TOKENS: Final[int] = 1024
 # which have independent input/output windows -- are not affected. We match by
 # prefix because LiteLLM uses both ``bedrock`` (raw provider inference) and
 # ``bedrock_converse`` (the Anthropic-on-Bedrock route, surfaced via the model
-# registry) for the same underlying API.
-_JOINT_BUDGET_PROVIDER_PREFIXES: Final[tuple[str, ...]] = ("bedrock",)
+# registry) for the same underlying API. OpenRouter likewise shares a single
+# window: it counts requested ``max_tokens`` against the same budget as input,
+# so a large configured ``max_output_tokens`` (e.g. a catalog value equal to
+# the full context) must be clamped to the remaining headroom.
+_JOINT_BUDGET_PROVIDER_PREFIXES: Final[tuple[str, ...]] = (
+    "bedrock",
+    "openrouter",
+)
 
 # Secret-bearing fields on LLM. Kept as a single source of truth so callers that
 # need to walk secrets (e.g. cipher-aware decryption on the save path) stay in
