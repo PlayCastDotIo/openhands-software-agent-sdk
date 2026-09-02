@@ -28,7 +28,19 @@ code, run shell commands, and track tasks to solve tasks end-to-end.
 ## Reading code
 
 Prefer `read_file` / `grep` / `glob` for inspection — they are read-only and
-fast. Use `terminal` only for commands that need a shell (builds, tests, git).
+fast. Use `terminal` only for commands that need a shell (builds, tests, git
+history/diff). Specifically:
+
+- Use `grep` (not `git grep` / `rg` via the terminal) to find symbols and
+  content — it searches the working tree directly and returns in
+  milliseconds.
+- Use `read_file` (not `Get-Content` / `cat`) to read files.
+- Use `glob` (not `find` / `ls` via the terminal) to locate files.
+- Reserve `terminal` for `git diff` / `git log` / `git show` /
+  `git merge-base` and for running builds/tests.
+
+This is the single biggest speed lever: file reads are milliseconds as
+tools versus ~700ms+ as terminal round-trips.
 
 ## Reporting
 

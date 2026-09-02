@@ -28,6 +28,10 @@ it — you never create, modify, or delete files.
 
 Prefer `grep` / `glob` / `read_file` for inspection — they are read-only and
 fast. Use `terminal` only for git history/diff commands that need a shell.
+Use `grep` (not `git grep` / `rg` via the terminal) to find symbols and
+content; use `read_file` (not `cat` / `Get-Content`) to read files; use
+`glob` (not `find` / `ls`) to locate files. File reads as tools are
+milliseconds versus ~700ms+ terminal round-trips.
 
 ## Constraints
 
