@@ -89,6 +89,7 @@ def test_register_builtins_agents_registers_expected_factories(
         "glob",
         "read_file",
         "git_show",
+        "git_diff",
         "task_tracker",
     ]
 
@@ -98,6 +99,7 @@ def test_register_builtins_agents_registers_expected_factories(
         "glob",
         "read_file",
         "git_show",
+        "git_diff",
         "file_editor",
     ]
     assert agent_tool_names["bash-runner"] == ["terminal"]
@@ -134,6 +136,7 @@ def test_register_builtins_agents_skips_web_researcher_without_browser() -> None
                 "glob",
                 "read_file",
                 "git_show",
+                "git_diff",
                 "task_tracker",
             ],
         ),
@@ -146,12 +149,21 @@ def test_register_builtins_agents_skips_web_researcher_without_browser() -> None
                 "glob",
                 "read_file",
                 "git_show",
+                "git_diff",
                 "task_tracker",
             ],
         ),
         (
             "explore",
-            ["terminal", "grep", "glob", "read_file", "git_show", "file_editor"],
+            [
+                "terminal",
+                "grep",
+                "glob",
+                "read_file",
+                "git_show",
+                "git_diff",
+                "file_editor",
+            ],
         ),
         ("bash", ["terminal"]),
     ],

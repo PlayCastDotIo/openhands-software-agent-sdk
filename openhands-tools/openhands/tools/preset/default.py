@@ -22,6 +22,7 @@ def register_default_tools(enable_browser: bool = True) -> None:
     # Tools are now automatically registered when imported
     from openhands.tools.file_editor import FileEditorTool
     from openhands.tools.gemini.read_file import ReadFileTool
+    from openhands.tools.git_diff import GitDiffTool
     from openhands.tools.git_show import GitShowTool
     from openhands.tools.glob import GlobTool
     from openhands.tools.grep import GrepTool
@@ -34,6 +35,7 @@ def register_default_tools(enable_browser: bool = True) -> None:
     logger.debug(f"Tool: {GlobTool.name} registered.")
     logger.debug(f"Tool: {ReadFileTool.name} registered.")
     logger.debug(f"Tool: {GitShowTool.name} registered.")
+    logger.debug(f"Tool: {GitDiffTool.name} registered.")
     logger.debug(f"Tool: {TaskTrackerTool.name} registered.")
 
     if enable_browser:
@@ -58,6 +60,7 @@ def get_default_tools(
     # Import tools to access their name attributes
     from openhands.tools.file_editor import FileEditorTool
     from openhands.tools.gemini.read_file import ReadFileTool
+    from openhands.tools.git_diff import GitDiffTool
     from openhands.tools.git_show import GitShowTool
     from openhands.tools.glob import GlobTool
     from openhands.tools.grep import GrepTool
@@ -71,6 +74,7 @@ def get_default_tools(
         Tool(name=GlobTool.name),
         Tool(name=ReadFileTool.name),
         Tool(name=GitShowTool.name),
+        Tool(name=GitDiffTool.name),
         Tool(name=TaskTrackerTool.name),
     ]
     if enable_browser:

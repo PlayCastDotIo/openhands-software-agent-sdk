@@ -21,15 +21,17 @@ DEFAULT_EXEC_TOOL_NAMES: tuple[str, ...] = (
     "glob",
     "read_file",
     "git_show",
+    "git_diff",
     "task_tracker",
 )
 """Names of the standard exec tools every default OpenHands agent gets.
 
-``grep`` / ``glob`` / ``read_file`` / ``git_show`` are read-only, non-blocking
-content tools: agents use them for repo search, single-file reads, and
-reading a file as it exists at a specific git ref (PR/branch review) instead
-of shelling out to ``git``/``rg``/``cat`` via the terminal, which on Windows
-runs under cmd.exe and can wedge the session on a slow/hung command.
+``grep`` / ``glob`` / ``read_file`` / ``git_show`` / ``git_diff`` are
+read-only, non-blocking content tools: agents use them for repo search,
+single-file reads, reading a file at a specific git ref, and branch diffs
+(PR review) instead of shelling out to ``git``/``rg``/``cat`` via the
+terminal, which on Windows runs under cmd.exe and can wedge the session on a
+slow/hung command.
 """
 
 BROWSER_TOOL_NAME = "browser_tool_set"

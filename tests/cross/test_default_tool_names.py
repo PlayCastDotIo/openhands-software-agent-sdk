@@ -18,6 +18,7 @@ from openhands.sdk.tool.defaults import (
 def test_default_exec_names_match_tool_classes() -> None:
     from openhands.tools.file_editor import FileEditorTool
     from openhands.tools.gemini.read_file import ReadFileTool
+    from openhands.tools.git_diff import GitDiffTool
     from openhands.tools.git_show import GitShowTool
     from openhands.tools.glob import GlobTool
     from openhands.tools.grep import GrepTool
@@ -31,6 +32,7 @@ def test_default_exec_names_match_tool_classes() -> None:
         GlobTool.name,
         ReadFileTool.name,
         GitShowTool.name,
+        GitDiffTool.name,
         TaskTrackerTool.name,
     )
 
