@@ -3,6 +3,7 @@ import importlib
 import json
 import logging
 import os
+import tempfile
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
@@ -192,11 +193,34 @@ def _get_worktree_start_point(repo_root: Path) -> str:
     return "HEAD"
 
 
+def _resolve_worktree_root(conversation_worktree_root: Path) -> Path:
+    """Resolve the worktree root to a real absolute host path.
+
+    The configured default is the POSIX-style ``Path("/tmp/conversation-worktrees")``,
+    which on Windows is a drive-less, root-relative path (``\\tmp\\...``) — the
+    conversation's ``workspace.working_dir`` would inherit that and every
+    ``cd``/file path the agent runs would be drive-less. Anchor a drive-less
+    leading-slash root under the system temp dir on Windows so the working dir
+    is a genuine ``C:\\...`` path; other inputs pass through.
+    """
+    root = Path(conversation_worktree_root)
+    if (
+        os.name == "nt"
+        and not root.is_absolute()
+        and root.parts
+        and root.parts[0] == "\\"
+    ):
+        rest = Path(*root.parts[1:]) if len(root.parts) > 1 else Path()
+        return Path(tempfile.gettempdir()) / rest
+    return root
+
+
 def _create_conversation_worktree(
     workspace: LocalWorkspace,
     conversation_id: UUID,
     conversation_worktree_root: Path,
 ) -> tuple[LocalWorkspace, Path, Path, str] | None:
+    conversation_worktree_root = _resolve_worktree_root(conversation_worktree_root)
     source_workspace = Path(workspace.working_dir).resolve()
     try:
         validate_git_repository(source_workspace)

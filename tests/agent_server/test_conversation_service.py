@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import socket
 import tempfile
 import threading
@@ -24,6 +25,7 @@ from openhands.agent_server.conversation_service import (
     _compose_conversation_info,
     _ConversationRecord,
     _get_worktree_start_point,
+    _resolve_worktree_root,
 )
 from openhands.agent_server.event_service import EventService
 from openhands.agent_server.models import (
@@ -2051,6 +2053,33 @@ class TestConversationServiceStartConversation:
         run_git_command(["git", "checkout", "--detach"], repo_dir)
 
         assert _get_worktree_start_point(repo_dir) == "master"
+
+    def test_resolve_worktree_root_anchors_drive_less_path_on_windows(self, tmp_path):
+        """A POSIX default (/tmp/...) must become a real absolute Windows path.
+
+        On Windows ``Path("/tmp/conversation-worktrees")`` is root-relative
+        (no drive letter), which leaked into the conversation's
+        ``workspace.working_dir`` as ``\\tmp\\...`` — every ``cd`` / file path
+        the agent then ran was drive-less. The resolver anchors it under the
+        system temp dir so the working dir is a genuine ``C:\\...`` path.
+        """
+        resolved = _resolve_worktree_root(Path("/tmp/conversation-worktrees"))
+        if os.name == "nt":
+            assert resolved.is_absolute(), (
+                f"worktree root must be absolute on Windows, got {resolved}"
+            )
+            # The drive-less /tmp leg must be anchored under the temp dir.
+            assert str(resolved).startswith(
+                tempfile.gettempdir().rstrip("\\/") + "\\"
+            ), f"expected temp-dir anchor, got {resolved}"
+        else:
+            # POSIX: /tmp/... is already absolute and passes through unchanged.
+            assert resolved == Path("/tmp/conversation-worktrees")
+
+    def test_resolve_worktree_root_passes_absolute_input_through(self, tmp_path):
+        """Already-absolute roots (real temp dirs, Windows C:\\ paths) are unchanged."""
+        root = tmp_path / "conversation-worktrees"
+        assert _resolve_worktree_root(root) == root
 
     def test_get_worktree_start_point_tolerates_fetch_failure(self, tmp_path):
         """If ``git fetch origin`` fails, fall back to cached refs.
