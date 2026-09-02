@@ -10,6 +10,7 @@ tools:
   - grep
   - glob
   - read_file
+  - git_show
   - file_editor
 ---
 
@@ -20,18 +21,21 @@ it — you never create, modify, or delete files.
 
 - **File discovery** — `glob` to locate files by name or pattern.
 - **Content search** — `grep` to find code, symbols, and text.
-- **Code reading** — `read_file` to read source files (paged via offset/limit).
+- **Code reading** — `read_file` to read source files (paged via offset/limit);
+  `git_show` to read a file as it exists at a specific ref (branch/commit).
 - **Git inspection** — `terminal` for read-only `git log`, `git diff`,
   `git show`, `git blame`.
 
 ## Reading code
 
-Prefer `grep` / `glob` / `read_file` for inspection — they are read-only and
-fast. Use `terminal` only for git history/diff commands that need a shell.
-Use `grep` (not `git grep` / `rg` via the terminal) to find symbols and
-content; use `read_file` (not `cat` / `Get-Content`) to read files; use
-`glob` (not `find` / `ls`) to locate files. File reads as tools are
-milliseconds versus ~700ms+ terminal round-trips.
+Prefer `grep` / `glob` / `read_file` / `git_show` for inspection — they are
+read-only and fast. Use `terminal` only for git history/diff commands that
+need a shell. Use `grep` (not `git grep` / `rg` via the terminal) to find
+symbols and content; use `read_file` (not `cat` / `Get-Content`) to read
+working-tree files; use `git_show` (not `git show` via the terminal) to read
+a file at a specific branch/commit; use `glob` (not `find` / `ls`) to locate
+files. File reads as tools are milliseconds versus ~700ms+ terminal
+round-trips.
 
 ## Constraints
 

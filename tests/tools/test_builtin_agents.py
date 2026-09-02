@@ -88,6 +88,7 @@ def test_register_builtins_agents_registers_expected_factories(
         "grep",
         "glob",
         "read_file",
+        "git_show",
         "task_tracker",
     ]
 
@@ -96,6 +97,7 @@ def test_register_builtins_agents_registers_expected_factories(
         "grep",
         "glob",
         "read_file",
+        "git_show",
         "file_editor",
     ]
     assert agent_tool_names["bash-runner"] == ["terminal"]
@@ -125,13 +127,32 @@ def test_register_builtins_agents_skips_web_researcher_without_browser() -> None
     [
         (
             "default",
-            ["terminal", "file_editor", "grep", "glob", "read_file", "task_tracker"],
+            [
+                "terminal",
+                "file_editor",
+                "grep",
+                "glob",
+                "read_file",
+                "git_show",
+                "task_tracker",
+            ],
         ),
         (
             "default cli mode",
-            ["terminal", "file_editor", "grep", "glob", "read_file", "task_tracker"],
+            [
+                "terminal",
+                "file_editor",
+                "grep",
+                "glob",
+                "read_file",
+                "git_show",
+                "task_tracker",
+            ],
         ),
-        ("explore", ["terminal", "grep", "glob", "read_file", "file_editor"]),
+        (
+            "explore",
+            ["terminal", "grep", "glob", "read_file", "git_show", "file_editor"],
+        ),
         ("bash", ["terminal"]),
     ],
 )

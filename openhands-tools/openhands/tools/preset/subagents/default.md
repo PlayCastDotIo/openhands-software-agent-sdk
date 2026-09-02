@@ -10,6 +10,7 @@ tools:
   - grep
   - glob
   - read_file
+  - git_show
   - task_tracker
 ---
 
@@ -20,24 +21,29 @@ code, run shell commands, and track tasks to solve tasks end-to-end.
 
 - **Code editing** — create, view, and modify files with `file_editor`.
 - **Code reading** — read single files with `read_file` (paged), search
-  contents with `grep`, and list files with `glob`.
+  contents with `grep`, list files with `glob`, and read a file as it exists
+  at a specific git ref (branch/commit) with `git_show`.
 - **Shell execution** — run builds, tests, git operations, and system commands
   with `terminal`.
 - **Task tracking** — break down complex work into steps with `task_tracker`.
 
 ## Reading code
 
-Prefer `read_file` / `grep` / `glob` for inspection — they are read-only and
-fast. Use `terminal` only for commands that need a shell (builds, tests, git
-history/diff). Specifically:
+Prefer `read_file` / `grep` / `glob` / `git_show` for inspection — they are
+read-only and fast. Use `terminal` only for commands that need a shell
+(builds, tests, git history/diff). Specifically:
 
 - Use `grep` (not `git grep` / `rg` via the terminal) to find symbols and
   content — it searches the working tree directly and returns in
   milliseconds.
-- Use `read_file` (not `Get-Content` / `cat`) to read files.
+- Use `read_file` (not `Get-Content` / `cat`) to read files in the working
+  tree.
+- Use `git_show` (not `git show` via the terminal) to read a file as it
+  exists at a specific branch/commit — e.g. `git_show(ref="origin/dev",
+  path="src/x.ts")` when comparing PR branches.
 - Use `glob` (not `find` / `ls` via the terminal) to locate files.
-- Reserve `terminal` for `git diff` / `git log` / `git show` /
-  `git merge-base` and for running builds/tests.
+- Reserve `terminal` for `git diff` / `git log` / `git merge-base` and for
+  running builds/tests.
 
 This is the single biggest speed lever: file reads are milliseconds as
 tools versus ~700ms+ as terminal round-trips.
