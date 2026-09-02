@@ -205,3 +205,36 @@ def test_terminal_tool_uses_windows_description(temp_dir: str) -> None:
 
     tools = TerminalTool.create(conv_state, terminal_type="powershell")
     assert "PowerShell session" in tools[0].description
+
+
+def test_ctrl_c_interrupt_returns_promptly_on_running_command(windows_session) -> None:
+    """A Ctrl+C interrupt must not wait out the 30s no-change timeout.
+
+    PowerShell emits the PS1_END metadata marker only as part of a *new*
+    command's suffix, so after an interrupt the poll loop never sees a fresh
+    marker and would otherwise spin for NO_CHANGE_TIMEOUT_SECONDS (30s) per
+    interrupt attempt — the wedge that made Windows reviewers ~30s slower per
+    recovery. A delivered Ctrl+C should be treated as complete immediately.
+    """
+    import time
+
+    # Reproduce the real wedge: a prior command HARD-timed out, leaving the
+    # session in a "previous command still running" state, and the terminal
+    # never re-emits a PS1_END marker after interrupt. Without the fix the
+    # poll loop would run the full no-change timeout.
+    from openhands.tools.terminal.terminal.terminal_session import (
+        TerminalCommandStatus,
+    )
+
+    windows_session.prev_status = TerminalCommandStatus.HARD_TIMEOUT
+
+    start = time.time()
+    interrupt = windows_session.execute(TerminalAction(command="C-c", is_input=True))
+    elapsed = time.time() - start
+
+    assert "interrupted" in interrupt.text.lower()
+    assert elapsed < 5, f"Ctrl+C took {elapsed:.1f}s (expected prompt return)"
+    # The shell must be usable again.
+    probe = windows_session.execute(TerminalAction(command='Write-Output "recovered"'))
+    assert probe.exit_code == 0
+    assert "recovered" in probe.text

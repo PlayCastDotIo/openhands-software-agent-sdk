@@ -17,9 +17,18 @@ from openhands.sdk.tool.spec import Tool
 DEFAULT_EXEC_TOOL_NAMES: tuple[str, ...] = (
     "terminal",
     "file_editor",
+    "grep",
+    "glob",
+    "read_file",
     "task_tracker",
 )
-"""Names of the standard exec tools every default OpenHands agent gets."""
+"""Names of the standard exec tools every default OpenHands agent gets.
+
+``grep`` / ``glob`` / ``read_file`` are read-only, non-blocking content
+tools: agents use them for repo search and single-file reads instead of
+shelling out to ``git``/``rg``/``cat`` via the terminal, which on Windows
+runs under cmd.exe and can wedge the session on a slow/hung command.
+"""
 
 BROWSER_TOOL_NAME = "browser_tool_set"
 """Name of the browser tool set.

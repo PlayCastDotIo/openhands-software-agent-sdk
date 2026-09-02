@@ -85,10 +85,19 @@ def test_register_builtins_agents_registers_expected_factories(
     assert agent_tool_names["general-purpose"] == [
         "terminal",
         "file_editor",
+        "grep",
+        "glob",
+        "read_file",
         "task_tracker",
     ]
 
-    assert agent_tool_names["code-explorer"] == ["terminal"]
+    assert agent_tool_names["code-explorer"] == [
+        "terminal",
+        "grep",
+        "glob",
+        "read_file",
+        "file_editor",
+    ]
     assert agent_tool_names["bash-runner"] == ["terminal"]
 
     if enable_browser:
@@ -114,9 +123,15 @@ def test_register_builtins_agents_skips_web_researcher_without_browser() -> None
 @pytest.mark.parametrize(
     "old_name, expected_tools",
     [
-        ("default", ["terminal", "file_editor", "task_tracker"]),
-        ("default cli mode", ["terminal", "file_editor", "task_tracker"]),
-        ("explore", ["terminal"]),
+        (
+            "default",
+            ["terminal", "file_editor", "grep", "glob", "read_file", "task_tracker"],
+        ),
+        (
+            "default cli mode",
+            ["terminal", "file_editor", "grep", "glob", "read_file", "task_tracker"],
+        ),
+        ("explore", ["terminal", "grep", "glob", "read_file", "file_editor"]),
         ("bash", ["terminal"]),
     ],
 )

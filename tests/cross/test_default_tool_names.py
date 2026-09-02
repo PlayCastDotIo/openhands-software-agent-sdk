@@ -17,12 +17,18 @@ from openhands.sdk.tool.defaults import (
 
 def test_default_exec_names_match_tool_classes() -> None:
     from openhands.tools.file_editor import FileEditorTool
+    from openhands.tools.gemini.read_file import ReadFileTool
+    from openhands.tools.glob import GlobTool
+    from openhands.tools.grep import GrepTool
     from openhands.tools.task_tracker import TaskTrackerTool
     from openhands.tools.terminal import TerminalTool
 
     assert DEFAULT_EXEC_TOOL_NAMES == (
         TerminalTool.name,
         FileEditorTool.name,
+        GrepTool.name,
+        GlobTool.name,
+        ReadFileTool.name,
         TaskTrackerTool.name,
     )
 

@@ -21,6 +21,7 @@ from openhands.tools.terminal.metadata import CmdOutputMetadata
 from openhands.tools.terminal.terminal.interface import (
     TerminalInterface,
     TerminalSessionBase,
+    parse_ctrl_key,
 )
 from openhands.tools.terminal.timeout_policy import foreground_timeout_rejection_for
 from openhands.tools.terminal.utils.command import (
@@ -545,6 +546,30 @@ class TerminalSession(TerminalSessionBase):
                     command,
                     enter=not is_special_key,
                 )
+                # Ctrl+C is delivered by ``terminal.interrupt()`` (the backend
+                # signals the process group). On bash terminals the marker is
+                # embedded in PS1, so it naturally re-appears after an
+                # interrupt and the poll loop detects completion. PowerShell
+                # instead emits the PS1_END marker only as part of a *new*
+                # command's suffix, so an interrupted command never re-emits
+                # it — the poll loop would spin the full no-change timeout
+                # waiting for a marker that will never arrive (the ~30s per
+                # interrupt cost of a wedged Windows session). Treat a
+                # delivered interrupt as complete immediately on PowerShell.
+                if (
+                    is_special_key
+                    and parse_ctrl_key(command) == "C-c"
+                    and self.terminal.is_powershell()
+                ):
+                    return TerminalObservation.from_text(
+                        command=command,
+                        text=(
+                            "[The running command was interrupted (Ctrl+C). "
+                            "The terminal is ready for the next command.]"
+                        ),
+                        exit_code=0,
+                        is_error=False,
+                    )
             else:
                 # convert command to raw string (for bash terminals)
                 if not self.terminal.is_powershell():
