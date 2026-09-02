@@ -238,3 +238,28 @@ def test_ctrl_c_interrupt_returns_promptly_on_running_command(windows_session) -
     probe = windows_session.execute(TerminalAction(command='Write-Output "recovered"'))
     assert probe.exit_code == 0
     assert "recovered" in probe.text
+
+
+def test_empty_command_returns_promptly_after_timeout(windows_session) -> None:
+    """An empty ``""`` recovery command must not spin the 30s no-change timeout.
+
+    After a wedged command the agent often sends a blank ``""`` as recovery.
+    With the previous command in HARD_TIMEOUT/NO_CHANGE_TIMEOUT state, the old
+    code fell through to the send+poll loop and waited the full
+    NO_CHANGE_TIMEOUT_SECONDS (30s) for output that never arrives. An empty
+    command does nothing and must return immediately.
+    """
+    import time
+
+    from openhands.tools.terminal.terminal.terminal_session import (
+        TerminalCommandStatus,
+    )
+
+    windows_session.prev_status = TerminalCommandStatus.HARD_TIMEOUT
+
+    start = time.time()
+    obs = windows_session.execute(TerminalAction(command="", is_input=False))
+    elapsed = time.time() - start
+
+    assert obs.is_error
+    assert elapsed < 5, f"empty command took {elapsed:.1f}s (expected immediate return)"

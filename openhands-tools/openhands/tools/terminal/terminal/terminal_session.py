@@ -432,25 +432,42 @@ class TerminalSession(TerminalSessionBase):
                 is_error=True,
             )
 
-        # If the previous command is not completed,
-        # we need to check if the command is empty
-        if self.prev_status not in {
-            TerminalCommandStatus.CONTINUE,
-            TerminalCommandStatus.NO_CHANGE_TIMEOUT,
-            TerminalCommandStatus.HARD_TIMEOUT,
-        }:
-            if command == "":
+        # An empty command does nothing — never enter the poll loop. It must
+        # return immediately even when a previous command is in a timed-out
+        # state (HARD_TIMEOUT / NO_CHANGE_TIMEOUT): otherwise an empty string
+        # sent as "recovery" spins the full no-change timeout waiting for
+        # output that will never arrive, wasting ~30s per retry after a wedge.
+        if command == "":
+            if self.prev_status not in {
+                TerminalCommandStatus.CONTINUE,
+                TerminalCommandStatus.NO_CHANGE_TIMEOUT,
+                TerminalCommandStatus.HARD_TIMEOUT,
+            }:
                 return TerminalObservation.from_text(
                     text="No previous running command to retrieve logs from.",
                     command=command,
                     is_error=True,
                 )
-            if is_input:
-                return TerminalObservation.from_text(
-                    text="No previous running command to interact with.",
-                    command=command,
-                    is_error=True,
-                )
+            return TerminalObservation.from_text(
+                text=(
+                    "The previous command did not finish cleanly. "
+                    "Use is_input='C-c' to interrupt it, or run a fresh command."
+                ),
+                command=command,
+                is_error=True,
+            )
+
+        # If the previous command is not completed and this is an input, reject.
+        if is_input and self.prev_status not in {
+            TerminalCommandStatus.CONTINUE,
+            TerminalCommandStatus.NO_CHANGE_TIMEOUT,
+            TerminalCommandStatus.HARD_TIMEOUT,
+        }:
+            return TerminalObservation.from_text(
+                text="No previous running command to interact with.",
+                command=command,
+                is_error=True,
+            )
 
         # Check if the command is a single command or multiple commands
         splited_commands = split_bash_commands(command)
