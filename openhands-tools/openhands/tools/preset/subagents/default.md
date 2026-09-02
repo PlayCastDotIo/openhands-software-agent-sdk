@@ -46,11 +46,16 @@ shell (builds, tests, git history). Specifically:
 - Use `git_diff` (not `git diff` via the terminal) to see what changed
   between refs or the working tree — e.g. `git_diff(ref="origin/dev...origin/webrtcopt")`.
 - Use `glob` (not `find` / `ls` via the terminal) to locate files.
+- Use `file_editor` (not `Set-Content` / `Out-File` / `cat >` / `echo >` /
+  redirection via the terminal) to create and edit files in the working tree.
 - Reserve `terminal` for `git log` / `git merge-base` and for running
   builds/tests.
 
 This is the single biggest speed lever: file reads are milliseconds as
-tools versus ~700ms+ as terminal round-trips.
+tools versus ~700ms+ as terminal round-trips. File *writes* are the same —
+`file_editor` is in-process and milliseconds, terminal writes are ~700ms
+round-trips, and the UI's edited-files tracker only reflects `file_editor`
+activity.
 
 ## Reporting
 

@@ -31,7 +31,9 @@ read-only, non-blocking content tools: agents use them for repo search,
 single-file reads, reading a file at a specific git ref, and branch diffs
 (PR review) instead of shelling out to ``git``/``rg``/``cat`` via the
 terminal, which on Windows runs under cmd.exe and can wedge the session on a
-slow/hung command.
+slow/hung command. ``file_editor`` is the in-process write path for the same
+reason: create/edit files with it rather than ``Set-Content``/``cat >`` /
+``echo >`` via the terminal (also keeps the UI's edited-files tracker fed).
 """
 
 BROWSER_TOOL_NAME = "browser_tool_set"
