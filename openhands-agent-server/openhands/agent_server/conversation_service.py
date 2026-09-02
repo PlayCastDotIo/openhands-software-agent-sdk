@@ -64,6 +64,7 @@ from openhands.sdk.conversation.title_utils import (
 )
 from openhands.sdk.credential import CredentialBindingError, VersionedCredentialBinding
 from openhands.sdk.event import MessageEvent
+from openhands.sdk.event.child_conversation_result import ChildConversationResultEvent
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.sdk.git.exceptions import GitCommandError, GitRepositoryError
 from openhands.sdk.git.utils import run_git_command, validate_git_repository
@@ -1049,7 +1050,12 @@ class ConversationService:
             if event_service is not None and event_service.is_open():
                 # Authoritative: we own it, so disk can only be staler.
                 state = await event_service.get_state()
+                prev_status = record.execution_status
                 record.execution_status = state.execution_status
+                # Live child thread reached a terminal state → notify its parent.
+                await self._notify_parent_if_child_terminal(
+                    conversation_id, record, prev_status, event_services
+                )
                 # Autosave will invalidate any signature and cached info we hold.
                 record.state_signature = None
                 record.cached_info = None
@@ -1078,11 +1084,65 @@ class ConversationService:
                 # Went live while we were reading disk; memory wins.
                 continue
             if status is not None:
+                prev_status = record.execution_status
                 record.execution_status = status
+                # Persisted child thread reached a terminal state → notify parent.
+                await self._notify_parent_if_child_terminal(
+                    conversation_id, record, prev_status, event_services
+                )
             # A persisted change (or a move to an unreadable state) invalidates
             # any cached ConversationInfo derived from the previous snapshot.
             record.cached_info = None
             record.state_signature = signature
+
+    async def _notify_parent_if_child_terminal(
+        self,
+        conversation_id: UUID,
+        record: "_ConversationRecord",
+        prev_status: ConversationExecutionStatus | None,
+        event_services: dict[UUID, EventService] | None,
+    ) -> None:
+        """Publish a ChildConversationResultEvent into a child's parent stream.
+
+        Fired when a conversation with a ``parent_conversation_id`` transitions
+        to a terminal status. The parent launched the child fire-and-forget
+        (``launch_child_conversation``), so this is how it learns the child
+        finished — published into the parent's event stream so the parent's
+        WebSocket subscribers (agent-canvas) see it without the child calling
+        back. Best-effort: a missing/unopen parent service or a racing status
+        is skipped silently.
+        """
+        if event_services is None:
+            return
+        parent_id = record.stored.parent_conversation_id
+        if (
+            parent_id is None
+            or prev_status is None
+            or prev_status.is_terminal()
+            or record.execution_status is None
+            or not record.execution_status.is_terminal()
+        ):
+            return
+        parent_event_service = event_services.get(parent_id)
+        if parent_event_service is None or not parent_event_service.is_open():
+            return
+        status = record.execution_status
+        await parent_event_service.publish_event(
+            ChildConversationResultEvent(
+                child_conversation_id=str(conversation_id),
+                parent_conversation_id=str(parent_id),
+                status=(
+                    "finished"
+                    if status == ConversationExecutionStatus.FINISHED
+                    else "error"
+                ),
+                error=(
+                    None
+                    if status == ConversationExecutionStatus.FINISHED
+                    else status.value
+                ),
+            )
+        )
 
     async def _reconcile_active_records(self) -> None:
         """Fill catalog entries for services injected outside normal startup.

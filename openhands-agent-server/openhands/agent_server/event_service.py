@@ -1872,6 +1872,19 @@ class EventService:
         # consider using asyncio.gather() for concurrent notification in the future.
         await self._pub_sub(state_update_event)
 
+    async def publish_event(self, event: Event) -> None:
+        """Publish an arbitrary event into this conversation's subscriber stream.
+
+        Used to inject cross-conversation events — e.g. a
+        ``ChildConversationResultEvent`` for a child thread that finished —
+        into a parent conversation's WebSocket stream so its subscribers (the
+        agent-canvas frontend) learn of the outcome without the child having
+        to call back.
+        """
+        if not self._conversation:
+            return
+        await self._pub_sub(event)
+
     async def __aenter__(self):
         await self.start()
         return self

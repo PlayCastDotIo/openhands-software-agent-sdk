@@ -593,6 +593,66 @@ async def test_prepare_for_sandbox_pause_drains_active_services(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_child_terminal_notifies_parent(tmp_path):
+    """A child reaching a terminal status publishes a result into its parent."""
+    from openhands.sdk.event.child_conversation_result import (
+        ChildConversationResultEvent,
+    )
+
+    service = ConversationService(conversations_dir=tmp_path / "conversations")
+    await service.__aenter__()
+    try:
+        child_id = uuid4()
+        parent_id = uuid4()
+        parent_svc = AsyncMock(spec=EventService)
+        parent_svc.is_open.return_value = True
+        assert service._event_services is not None
+        service._event_services = {parent_id: parent_svc}
+
+        child_record = _ConversationRecord(
+            stored=StoredConversation.model_construct(
+                id=child_id, parent_conversation_id=parent_id
+            ),
+            execution_status=ConversationExecutionStatus.FINISHED,
+        )
+        service._conversation_records = {child_id: child_record}
+
+        await service._notify_parent_if_child_terminal(
+            child_id,
+            child_record,
+            ConversationExecutionStatus.RUNNING,
+            service._event_services,
+        )
+
+        parent_svc.publish_event.assert_awaited_once()
+        event = parent_svc.publish_event.await_args.args[0]
+        assert isinstance(event, ChildConversationResultEvent)
+        assert str(event.child_conversation_id) == str(child_id)
+        assert str(event.parent_conversation_id) == str(parent_id)
+        assert event.status == "finished"
+    finally:
+        await service.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_child_terminal_skips_parent_notification_when_no_parent(tmp_path):
+    """A terminal child with no parent link does not publish anything."""
+    service = ConversationService(conversations_dir=tmp_path / "conversations")
+    await service.__aexit__(None, None, None)  # ensure clean shutdown if unused
+    # The no-parent case: no event_services, no crash.
+    child_record = _ConversationRecord(
+        stored=StoredConversation.model_construct(
+            id=uuid4(), parent_conversation_id=None
+        ),
+        execution_status=ConversationExecutionStatus.FINISHED,
+    )
+    # With event_services=None the helper must be a silent no-op.
+    await service._notify_parent_if_child_terminal(
+        uuid4(), child_record, ConversationExecutionStatus.RUNNING, None
+    )
+
+
+@pytest.mark.asyncio
 async def test_conversation_lifecycle_serializes_only_matching_ids(tmp_path):
     service = ConversationService(conversations_dir=tmp_path / "conversations")
     first_id = uuid4()

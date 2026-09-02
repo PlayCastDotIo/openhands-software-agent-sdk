@@ -1,5 +1,6 @@
 from openhands.sdk.event.acp_tool_call import ACPToolCallEvent
 from openhands.sdk.event.base import Event, LLMConvertibleEvent
+from openhands.sdk.event.child_conversation_result import ChildConversationResultEvent
 from openhands.sdk.event.condenser import (
     Condensation,
     CondensationRequest,
@@ -48,6 +49,7 @@ __all__ = [
     "CondensationRequest",
     "CondensationSummaryEvent",
     "ConversationStateUpdateEvent",
+    "ChildConversationResultEvent",
     "HookExecutionEvent",
     "LLMCompletionLogEvent",
     "EventID",
