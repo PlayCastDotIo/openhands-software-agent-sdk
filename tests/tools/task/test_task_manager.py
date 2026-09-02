@@ -245,6 +245,52 @@ class TestTaskManager:
         assert task.conversation is not None
         assert task.conversation.max_iteration_per_run == 50
 
+    def test_subagent_inherits_parent_tool_concurrency_limit(self, tmp_path):
+        """A spawned sub-agent inherits the parent's tool_concurrency_limit.
+
+        The perdix default agent profile runs at tool_concurrency_limit=8 so a
+        wave of read_file / grep / glob calls executes in parallel. Without
+        inheritance the sub-agent would silently drop back to the SDK default
+        of 1, serializing every read.
+        """
+        register_builtins_agents()
+        llm = _make_llm()
+        agent = Agent(
+            llm=llm,
+            tools=[],
+            tool_concurrency_limit=8,
+        )
+        parent = LocalConversation(
+            agent=agent,
+            workspace=str(tmp_path),
+            visualizer=None,
+            delete_on_close=False,
+        )
+        manager = TaskManager()
+        manager._ensure_parent(parent)
+
+        task = manager._create_task(subagent_type="general-purpose", description=None)
+        assert task.conversation is not None
+        assert task.conversation.agent.tool_concurrency_limit == 8
+
+    def test_subagent_with_default_parent_keeps_sequential(self, tmp_path):
+        """A parent at the SDK default (1) leaves the sub-agent sequential."""
+        register_builtins_agents()
+        llm = _make_llm()
+        agent = Agent(llm=llm, tools=[])
+        parent = LocalConversation(
+            agent=agent,
+            workspace=str(tmp_path),
+            visualizer=None,
+            delete_on_close=False,
+        )
+        manager = TaskManager()
+        manager._ensure_parent(parent)
+
+        task = manager._create_task(subagent_type="general-purpose", description=None)
+        assert task.conversation is not None
+        assert task.conversation.agent.tool_concurrency_limit == 1
+
     def test_resume_unknown_task_raises(self, tmp_path):
         manager, _ = _manager_with_parent(tmp_path)
         with pytest.raises(ValueError, match="not found"):

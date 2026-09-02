@@ -538,6 +538,17 @@ class TaskManager:
 
         sub_agent = factory.factory_func(sub_agent_llm)
 
+        # Sub-agents inherit the parent's tool concurrency policy so a wave of
+        # read-only calls (read_file / grep / glob) runs in parallel inside the
+        # worker too, instead of silently dropping back to the SDK's sequential
+        # default. The harness's resource locking keeps same-file writes and the
+        # shared terminal session serialized regardless.
+        parent_limit = parent.agent.tool_concurrency_limit
+        if parent_limit and sub_agent.tool_concurrency_limit == 1:
+            sub_agent = sub_agent.model_copy(
+                update={"tool_concurrency_limit": parent_limit}
+            )
+
         # ensuring that the sub-agent LLM has stream deactivated
         sub_agent = sub_agent.model_copy(
             update={"llm": sub_agent.llm.model_copy(update={"stream": False})}
