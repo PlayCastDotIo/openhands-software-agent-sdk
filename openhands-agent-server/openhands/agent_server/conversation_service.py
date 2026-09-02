@@ -48,7 +48,7 @@ from openhands.agent_server.telemetry import (
 )
 from openhands.agent_server.telemetry.sanitizer import model_family, safe_token
 from openhands.agent_server.utils import safe_rmtree, utc_now
-from openhands.sdk import LLM, AgentContext, Event, Message
+from openhands.sdk import LLM, AgentContext, Event, Message, TextContent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.agent.acp_file_credentials import CODEX_AUTH_SECRET_NAME
 from openhands.sdk.agent.base import AgentBase
@@ -1102,15 +1102,25 @@ class ConversationService:
         prev_status: ConversationExecutionStatus | None,
         event_services: dict[UUID, EventService] | None,
     ) -> None:
-        """Publish a ChildConversationResultEvent into a child's parent stream.
+        """Persist a ChildConversationResultEvent into a child's parent.
 
         Fired when a conversation with a ``parent_conversation_id`` transitions
         to a terminal status. The parent launched the child fire-and-forget
         (``launch_child_conversation``), so this is how it learns the child
-        finished — published into the parent's event stream so the parent's
-        WebSocket subscribers (agent-canvas) see it without the child calling
-        back. Best-effort: a missing/unopen parent service or a racing status
-        is skipped silently.
+        finished — without the child calling back and without the parent's
+        WebSocket being open.
+
+        Two effects, both server-side:
+        * A ``ChildConversationResultEvent`` is published into the parent's
+          event stream for live subscribers (agent-canvas uses it to toast).
+        * The ``[child-conversation-result]`` user message is appended to the
+          parent's persisted event log via ``send_message(run=False)``, so the
+          parent's history carries the outcome even when the parent is closed
+          or restarts before it is opened.
+
+        Best-effort: a missing/unopen parent service, an active goal loop, or
+        a parent that is currently running is skipped silently (the result is
+        still discoverable via the child's persisted status).
         """
         if event_services is None:
             return
@@ -1123,10 +1133,18 @@ class ConversationService:
             or not record.execution_status.is_terminal()
         ):
             return
-        parent_event_service = event_services.get(parent_id)
-        if parent_event_service is None or not parent_event_service.is_open():
-            return
         status = record.execution_status
+
+        # Hydrate the parent if it is idle/closed so the message has a home in
+        # its persisted log. Runtime credential bindings are not required for a
+        # server-injected result message.
+        parent_event_service = await self._get_or_load_event_service(
+            parent_id, require_runtime_bindings=False
+        )
+        if parent_event_service is None:
+            return
+
+        # Live subscribers still get the typed event (toast).
         await parent_event_service.publish_event(
             ChildConversationResultEvent(
                 child_conversation_id=str(conversation_id),
@@ -1143,6 +1161,45 @@ class ConversationService:
                 ),
             )
         )
+
+        # Do not disturb an active /goal loop or a mid-run parent. The result
+        # message stays discoverable via the child's persisted status and the
+        # reconcile fallback, so skipping is safe.
+        if (
+            parent_event_service._goal_loop_task is not None
+            and not parent_event_service._goal_loop_task.done()
+        ):
+            return
+        if await parent_event_service._get_execution_status() == (
+            ConversationExecutionStatus.RUNNING
+        ):
+            return
+
+        payload = json.dumps(
+            {
+                "status": (
+                    "finished"
+                    if status == ConversationExecutionStatus.FINISHED
+                    else "error"
+                ),
+                "conversation_id": str(conversation_id),
+                "parent_conversation_id": str(parent_id),
+                "error": None
+                if status == ConversationExecutionStatus.FINISHED
+                else status.value,
+            },
+            default=str,
+        )
+        message = Message(
+            role="user",
+            content=[TextContent(text=f"[child-conversation-result] {payload}")],
+        )
+        try:
+            await parent_event_service.send_message(message, run=False)
+        except ValueError:
+            # The parent may have gone idle/closed between the guard and the
+            # append; a refused run must not surface here.
+            pass
 
     async def _reconcile_active_records(self) -> None:
         """Fill catalog entries for services injected outside normal startup.
@@ -1231,7 +1288,10 @@ class ConversationService:
                     self._lifecycle_condition.notify_all()
 
     async def _get_or_load_event_service(
-        self, conversation_id: UUID
+        self,
+        conversation_id: UUID,
+        *,
+        require_runtime_bindings: bool = True,
     ) -> EventService | None:
         event_services = self._event_services
         if event_services is None:
@@ -1242,7 +1302,10 @@ class ConversationService:
         ):
             return None
         async with self._conversation_lifecycle(conversation_id):
-            return await self._get_or_load_event_service_locked(conversation_id)
+            return await self._get_or_load_event_service_locked(
+                conversation_id,
+                require_runtime_bindings=require_runtime_bindings,
+            )
 
     async def _get_or_load_event_service_locked(
         self,

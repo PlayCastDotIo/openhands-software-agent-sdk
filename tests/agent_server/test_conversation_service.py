@@ -594,7 +594,7 @@ async def test_prepare_for_sandbox_pause_drains_active_services(tmp_path):
 
 @pytest.mark.asyncio
 async def test_child_terminal_notifies_parent(tmp_path):
-    """A child reaching a terminal status publishes a result into its parent."""
+    """A terminal child publishes + persists a result into its parent."""
     from openhands.sdk.event.child_conversation_result import (
         ChildConversationResultEvent,
     )
@@ -606,6 +606,9 @@ async def test_child_terminal_notifies_parent(tmp_path):
         parent_id = uuid4()
         parent_svc = AsyncMock(spec=EventService)
         parent_svc.is_open.return_value = True
+        # Not in a goal loop and not running, so the result message is appended.
+        parent_svc._goal_loop_task = None
+        parent_svc._get_execution_status.return_value = ConversationExecutionStatus.IDLE
         assert service._event_services is not None
         service._event_services = {parent_id: parent_svc}
 
@@ -630,6 +633,60 @@ async def test_child_terminal_notifies_parent(tmp_path):
         assert str(event.child_conversation_id) == str(child_id)
         assert str(event.parent_conversation_id) == str(parent_id)
         assert event.status == "finished"
+
+        # The result is also persisted into the parent's log as a message.
+        parent_svc.send_message.assert_awaited_once()
+        message = parent_svc.send_message.await_args.args[0]
+        text = message.content[0].text
+        assert text.startswith("[child-conversation-result] ")
+        payload = json.loads(text[len("[child-conversation-result] ") :])
+        assert payload["status"] == "finished"
+        assert payload["conversation_id"] == str(child_id)
+    finally:
+        await service.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_child_terminal_skips_message_when_parent_running(tmp_path):
+    """A running parent still gets the live event but not a persisted message."""
+    from openhands.sdk.event.child_conversation_result import (
+        ChildConversationResultEvent,
+    )
+
+    service = ConversationService(conversations_dir=tmp_path / "conversations")
+    await service.__aenter__()
+    try:
+        child_id = uuid4()
+        parent_id = uuid4()
+        parent_svc = AsyncMock(spec=EventService)
+        parent_svc.is_open.return_value = True
+        parent_svc._goal_loop_task = None
+        parent_svc._get_execution_status.return_value = (
+            ConversationExecutionStatus.RUNNING
+        )
+        assert service._event_services is not None
+        service._event_services = {parent_id: parent_svc}
+
+        child_record = _ConversationRecord(
+            stored=StoredConversation.model_construct(
+                id=child_id, parent_conversation_id=parent_id
+            ),
+            execution_status=ConversationExecutionStatus.FINISHED,
+        )
+        service._conversation_records = {child_id: child_record}
+
+        await service._notify_parent_if_child_terminal(
+            child_id,
+            child_record,
+            ConversationExecutionStatus.RUNNING,
+            service._event_services,
+        )
+
+        parent_svc.publish_event.assert_awaited_once()
+        assert isinstance(
+            parent_svc.publish_event.await_args.args[0], ChildConversationResultEvent
+        )
+        parent_svc.send_message.assert_not_awaited()
     finally:
         await service.__aexit__(None, None, None)
 
