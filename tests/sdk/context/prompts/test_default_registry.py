@@ -34,7 +34,6 @@ from openhands.sdk.context.prompts.sections.dynamic import (
 )
 from openhands.sdk.context.prompts.sections.static import (
     BrowserSection,
-    EfficiencySection,
     MemorySection,
     ModelSpecificSection,
     RoleSection,
@@ -127,8 +126,15 @@ def test_soul_section_renders_custom_and_defaults() -> None:
 
 
 def test_refine_swaps_shell_term_on_windows_only() -> None:
-    posix = EfficiencySection().render(_ctx(platform=Platform.LINUX)) or ""
-    windows = EfficiencySection().render(_ctx(platform=Platform.WINDOWS)) or ""
+    # SecurityRiskAssessmentSection still carries a "bash" mention (curl|bash
+    # supply-chain rule), so it exercises refine()'s Windows substitution. The
+    # Efficiency section was rewritten to steer to in-process tools and no
+    # longer contains a bare shell term (its win32 rendering is pinned by the
+    # __win32 prompt snapshot).
+    posix = SecurityRiskAssessmentSection().render(_ctx(platform=Platform.LINUX)) or ""
+    windows = (
+        SecurityRiskAssessmentSection().render(_ctx(platform=Platform.WINDOWS)) or ""
+    )
     assert "bash" in posix and "powershell" not in posix
     assert "powershell" in windows and "bash" not in windows
 
