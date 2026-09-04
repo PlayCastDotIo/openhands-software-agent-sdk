@@ -51,6 +51,14 @@ shell (builds, tests, git history). Specifically:
 - Reserve `terminal` for `git log` / `git merge-base` and for running
   builds/tests.
 
+**Bound the exploration.** Large token cost comes from re-reading full files:
+every `read_file` / `git_show` dumps full content into context. Diff-first —
+review the changed hunks and the immediate context needed to judge them; read
+whole files only when a hunk can't be understood otherwise. Don't re-read the
+same files in a loop; once you have the evidence for a finding, move on.
+Prefer `grep` (targeted matches) over `read_file` (whole-file) for "where is
+X used".
+
 This is the single biggest speed lever: file reads are milliseconds as
 tools versus ~700ms+ as terminal round-trips. File *writes* are the same —
 `file_editor` is in-process and milliseconds, terminal writes are ~700ms
