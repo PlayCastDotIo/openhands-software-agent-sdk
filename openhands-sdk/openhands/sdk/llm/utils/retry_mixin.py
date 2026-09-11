@@ -4,6 +4,7 @@ from typing import Any, cast
 from tenacity import (
     RetryCallState,
     retry,
+    retry_base,
     retry_if_exception_message,
     retry_if_exception_type,
     stop_after_attempt,
@@ -77,7 +78,9 @@ class RetryMixin:
     def retry_decorator(
         self,
         num_retries: int = 5,
-        retry_exceptions: tuple[type[BaseException], ...] = (LLMNoResponseError,),
+        retry_exceptions: tuple[type[BaseException], ...] | retry_base = (
+            LLMNoResponseError,
+        ),
         retry_message_patterns: tuple[str, ...] = (),
         retry_min_wait: int = 8,
         retry_max_wait: int = 64,
@@ -88,6 +91,11 @@ class RetryMixin:
         Create a LLM retry decorator with customizable parameters.
         This is used for 429 errors, and a few other exceptions in LLM classes.
 
+        ``retry_exceptions`` may be either a tuple of exception types (retried
+        as-is) or a tenacity retry predicate (e.g. a combined
+        ``retry_if_exception_type(...) & retry_if_not_exception(...)``) for
+        finer-grained control over which exceptions are retried.
+
         ``retry_message_patterns`` are regex patterns matched against the
         exception message (via tenacity's ``retry_if_exception_message``).
         They let callers retry provider errors that surface as a 4xx with a
@@ -96,7 +104,11 @@ class RetryMixin:
         """
         before_sleep = self._build_before_sleep(num_retries, retry_listener)
 
-        retry_condition = retry_if_exception_type(retry_exceptions)
+        retry_condition = (
+            retry_if_exception_type(retry_exceptions)
+            if isinstance(retry_exceptions, tuple)
+            else retry_exceptions
+        )
         for pattern in retry_message_patterns:
             retry_condition = retry_condition | retry_if_exception_message(
                 match=pattern
