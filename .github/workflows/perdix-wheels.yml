@@ -9,7 +9,7 @@ on:
     workflow_dispatch:
         inputs:
             release_tag:
-                description: "Git tag of the release to attach wheels to (e.g. perdix-1.44.1)"
+                description: Git tag of the release to attach wheels to (e.g. perdix-1.44.1)
                 required: true
 
 jobs:
