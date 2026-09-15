@@ -84,7 +84,11 @@ def test_get_git_diff_modified_file():
 
 
 def test_get_git_diff_deleted_file():
-    """Test get_git_diff with a deleted file."""
+    """A deleted tracked file diffs as its committed content vs empty.
+
+    The Files Changed tab lists deletions and needs this to render the
+    removal diff; erroring here forced the UI to show a bare placeholder.
+    """
     with tempfile.TemporaryDirectory() as temp_dir:
         setup_git_repo(temp_dir)
 
@@ -94,16 +98,18 @@ def test_get_git_diff_deleted_file():
         test_file.write_text(original_content)
 
         run_bash_command("git add .", temp_dir)
-        run_bash_command("git commit -m 'Initial commit'", temp_dir)
+        # Double quotes: this command must also parse under cmd.exe
+        # (shell=True on Windows), where single quotes do not group.
+        run_bash_command('git commit -m "Initial commit"', temp_dir)
 
         # Delete the file
         os.remove(test_file)
 
-        # The function will raise GitPathError for deleted files
-        from openhands.sdk.git.exceptions import GitPathError
+        diff = run_in_directory(temp_dir, get_git_diff, "deleted_file.txt")
 
-        with pytest.raises(GitPathError):
-            run_in_directory(temp_dir, get_git_diff, "deleted_file.txt")
+        assert isinstance(diff, GitDiff)
+        assert diff.original == original_content
+        assert diff.modified == ""
 
 
 def test_get_git_diff_nested_path():

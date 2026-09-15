@@ -60,32 +60,33 @@ def get_git_diff(relative_file_path: str | Path, ref: str | None = None) -> GitD
             upstream/default branch as before.
 
     Returns:
-        GitDiff object containing diff information
+        GitDiff object containing diff information. A tracked file deleted
+        from the working tree returns its ref content as ``original`` with
+        an empty ``modified`` (a pure removal diff).
 
     Raises:
-        GitPathError: If file is too large or doesn't exist
+        GitPathError: If file is too large, or exists neither on disk nor
+            at the resolved ref
         GitRepositoryError: If not in a git repository
         GitCommandError: If git commands fail (including when ``ref`` is
             provided but does not resolve in the repository).
     """
     path = Path(os.getcwd(), relative_file_path).resolve()
 
-    # Check if file exists
-    if not path.exists():
-        raise GitPathError(f"File does not exist: {path}")
+    # Check file size (readable files only; deletions are sized at the ref)
+    if path.exists():
+        try:
+            file_size = os.path.getsize(path)
+            if file_size > MAX_FILE_SIZE_FOR_GIT_DIFF:
+                raise GitPathError(
+                    f"File too large for git diff: {file_size} bytes "
+                    f"(max: {MAX_FILE_SIZE_FOR_GIT_DIFF} bytes)"
+                )
+        except OSError as e:
+            raise GitPathError(f"Cannot access file: {path}") from e
 
-    # Check file size
-    try:
-        file_size = os.path.getsize(path)
-        if file_size > MAX_FILE_SIZE_FOR_GIT_DIFF:
-            raise GitPathError(
-                f"File too large for git diff: {file_size} bytes "
-                f"(max: {MAX_FILE_SIZE_FOR_GIT_DIFF} bytes)"
-            )
-    except OSError as e:
-        raise GitPathError(f"Cannot access file: {path}") from e
-
-    # Find git repository
+    # Find git repository. Walks up from the path itself, so files deleted
+    # from the working tree still resolve their repo.
     closest_git_repo = get_closest_git_repo(path)
     if not closest_git_repo:
         raise GitRepositoryError(f"File is not in a git repository: {path}")
@@ -106,27 +107,33 @@ def get_git_diff(relative_file_path: str | Path, ref: str | None = None) -> GitD
     except ValueError as e:
         raise GitPathError(f"File is not within git repository: {path}") from e
 
-    # Get old content (from the ref)
+    # Get old content (from the ref); None when the ref never tracked it
     try:
-        original = run_git_command(
+        original: str | None = run_git_command(
             ["git", "show", f"{current_rev}:{relative_path_from_repo}"], validated_repo
         )
     except GitCommandError:
         logger.debug(f"No old content found for {path} at ref {current_rev}")
-        original = ""
+        original = None
 
-    # Get new content (current file)
-    try:
-        with open(path, encoding="utf-8") as f:
-            modified = "\n".join(f.read().splitlines())
-    except (OSError, UnicodeDecodeError) as e:
-        logger.error(f"Failed to read file {path}: {e}")
+    # Get new content (current file). Absent from disk is a deletion when
+    # the ref tracked it — the removal diff is original vs empty.
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                modified = "\n".join(f.read().splitlines())
+        except (OSError, UnicodeDecodeError) as e:
+            logger.error(f"Failed to read file {path}: {e}")
+            modified = ""
+    elif original is None:
+        raise GitPathError(f"File does not exist: {path}")
+    else:
         modified = ""
 
     logger.info(f"Generated git diff for {path}")
     return GitDiff(
         modified=modified,
-        original=original,
+        original=original or "",
     )
 
 
