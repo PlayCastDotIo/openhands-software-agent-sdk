@@ -951,9 +951,11 @@ class EventService:
 
         The /api/git/changes endpoint expects a real repository to compute
         changes against; without this, agent-created files never appear in
-        the Changes tab. We only run `git init` (no commit) — empty repos
-        are handled by `get_valid_ref()` via GIT_EMPTY_TREE_HASH, and
-        untracked files surface through `git ls-files --others`.
+        the Changes tab. After `git init` we also snapshot whatever already
+        exists into an initial commit: untracked-only tracking shows every
+        pre-existing file as ADDED and silently drops deletions (git never
+        tracked them, so there is no deletion event to report). The inline
+        identity keeps the user's git config untouched.
         """
         try:
             validate_git_repository(working_dir)
@@ -966,6 +968,22 @@ class EventService:
 
         try:
             run_git_command(["git", "init"], working_dir)
+            run_git_command(["git", "add", "-A"], working_dir)
+            run_git_command(
+                [
+                    "git",
+                    "-c",
+                    "user.name=OpenHands",
+                    "-c",
+                    "user.email=openhands@all-hands.dev",
+                    "commit",
+                    "--allow-empty",
+                    "--no-verify",
+                    "-m",
+                    "Snapshot workspace at conversation start",
+                ],
+                working_dir,
+            )
         except GitCommandError as e:
             # Don't block conversation startup if git is missing or init
             # fails — the git router is defensive and will return [] anyway.

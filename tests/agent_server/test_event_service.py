@@ -2321,6 +2321,31 @@ class TestEventServiceStartWithRunningStatus:
         assert marker.exists()
         assert marker.read_text() == "preexisting"
 
+    @pytest.mark.skipif(not shutil.which("git"), reason="git executable not found")
+    def test_ensure_workspace_git_repo_tracks_preexisting_file_changes(self, tmp_path):
+        """Pre-existing files must register M/D once the workspace is a repo.
+
+        Untracked-only tracking (git init with no commit) lists every
+        pre-existing file as ADDED and silently drops deletions — the file
+        was never committed, so `git diff` has no deletion to report and it
+        vanishes from the Files Changed tab.
+        """
+        from openhands.sdk.git.git_changes import get_changes_in_repo
+        from openhands.sdk.git.models import GitChangeStatus
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "deleted.txt").write_text("old")
+        (workspace / "modified.txt").write_text("old")
+
+        EventService._ensure_workspace_is_git_repo(workspace)
+
+        (workspace / "deleted.txt").unlink()
+        (workspace / "modified.txt").write_text("new")
+        by_path = {str(c.path): c.status for c in get_changes_in_repo(workspace)}
+        assert by_path.get("deleted.txt") == GitChangeStatus.DELETED
+        assert by_path.get("modified.txt") == GitChangeStatus.UPDATED
+
 
 class TestEventServiceConcurrentSubscriptions:
     """Test cases for concurrent subscription handling without deadlocks.
