@@ -335,6 +335,122 @@ def test_oauth_mcp_connection_persists_and_reuses_settings_state(
         reset_stores()
 
 
+def test_runtime_provider_silently_refreshes_expired_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    protected_oauth_mcp_server: str,
+):
+    """An expired access token must refresh silently on the next conversation.
+
+    The reported Sentry behavior: auth works for ~an hour (the access-token
+    lifetime), then every new thread falls into interactive re-auth. The
+    correct behavior is a transparent refresh-token exchange — no browser,
+    no skipped server (perdix #17).
+    """
+    reset_stores()
+    _HeadlessOAuth.redirect_count = 0
+    _HeadlessOAuth.reject_redirects = False
+    monkeypatch.setattr(mcp_utils, "OAuth", _HeadlessOAuth)
+    try:
+        config = Config(
+            session_api_keys=[],
+            conversations_path=tmp_path / "conversations",
+            secret_key=SecretStr("mcp-oauth-e2e-test-key"),
+        )
+        mcp_config = coerce_mcp_config(
+            {
+                "mail": {
+                    "url": protected_oauth_mcp_server,
+                    "transport": "http",
+                    "auth": {
+                        "strategy": "oauth2",
+                        "authentication": {
+                            "type": "oauth",
+                            "client_auth_method": "none",
+                            "scopes": ["mail.read"],
+                        },
+                    },
+                }
+            }
+        )
+        settings = PersistedSettings()
+        settings.agent_settings = settings.agent_settings.model_copy(
+            update={"mcp_config": mcp_config}
+        )
+        settings_store = get_settings_store(config)
+        settings_store.save(settings)
+        tool_provider = create_settings_backed_mcp_tool_provider(config)
+
+        # Explicit first-auth (install-flow path): persists tokens + expiry.
+        from openhands.sdk.mcp.utils import create_mcp_tools
+
+        with create_mcp_tools(
+            mcp_config,
+            timeout=10.0,
+            mcp_oauth_token_storage=MCPSettingsOAuthTokenStore(),
+        ):
+            pass
+        assert _HeadlessOAuth.redirect_count == 1
+
+        reloaded = settings_store.load()
+        assert reloaded is not None
+        persisted = reloaded.agent_settings.mcp_config
+        first_state = dump_mcp_config(persisted)["mail"]["auth"]["state"]
+        first_access = first_state["tokens"]["access_token"]
+
+        # Age the stored access token past its lifetime.
+        import time as time_mod
+
+        def age_tokens(s: PersistedSettings) -> PersistedSettings:
+            servers = dict(s.agent_settings.mcp_config)
+            mail = servers["mail"]
+            assert mail.auth is not None and mail.auth.state is not None
+            servers["mail"] = mail.model_copy(
+                update={
+                    "auth": mail.auth.model_copy(
+                        update={
+                            "state": mail.auth.state.model_copy(
+                                update={"token_expires_at": time_mod.time() - 10}
+                            )
+                        }
+                    )
+                }
+            )
+            s.agent_settings = s.agent_settings.model_copy(
+                update={"mcp_config": servers}
+            )
+            return s
+
+        settings_store.update(age_tokens)
+
+        # New conversation: must exchange the refresh token, not re-authorize.
+        _HeadlessOAuth.reject_redirects = True
+        aged = settings_store.load()
+        assert aged is not None
+        with tool_provider.create_tools(
+            aged.agent_settings.mcp_config,
+            timeout=10.0,
+        ) as client:
+            tool = next(t for t in client.tools if t.name == "read_subject")
+            assert tool.executor is not None
+            observation = tool.executor(
+                tool.action_from_arguments({"subject": "Refreshed"})
+            )
+            assert "OAuth mail subject: Refreshed" in observation.text
+
+        # No second interactive flow, and the rotated access token proves a
+        # refresh exchange (not mere reuse of the aged token).
+        assert _HeadlessOAuth.redirect_count == 1
+        final = settings_store.load()
+        assert final is not None
+        final_state = dump_mcp_config(final.agent_settings.mcp_config)["mail"]["auth"][
+            "state"
+        ]
+        assert final_state["tokens"]["access_token"] != first_access
+    finally:
+        reset_stores()
+
+
 def test_runtime_provider_rejects_interactive_auth_when_tokens_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
