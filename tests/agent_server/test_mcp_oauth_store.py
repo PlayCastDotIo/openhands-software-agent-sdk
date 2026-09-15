@@ -233,11 +233,13 @@ def test_oauth_mcp_connection_persists_and_reuses_settings_state(
     monkeypatch: pytest.MonkeyPatch,
     protected_oauth_mcp_server: str,
 ):
-    """Authenticate to a protected MCP server once, serialize, reload, and reuse.
+    """First-auth persists tokens; runtime provider reuses them headlessly.
 
-    The server uses FastMCP's in-memory OAuth provider. The client uses the
-    normal SDK MCP settings shape plus FastMCP OAuth; only the human
-    browser/callback step is replaced with a deterministic redirect follower.
+    The server uses FastMCP's in-memory OAuth provider. The interactive
+    first-auth (the install/test flow's job — conversation start never goes
+    interactive) uses the SDK's plain OAuth with only the browser/callback
+    step replaced by a deterministic redirect follower. The runtime provider
+    then reuses the persisted tokens without any redirect at all.
     """
 
     reset_stores()
@@ -274,9 +276,14 @@ def test_oauth_mcp_connection_persists_and_reuses_settings_state(
         settings_store.save(settings)
         tool_provider = create_settings_backed_mcp_tool_provider(config)
 
-        with tool_provider.create_tools(
+        # Explicit first-auth (what the install-time OAuth probe does):
+        # interactive OAuth + settings-backed token storage.
+        from openhands.sdk.mcp.utils import create_mcp_tools
+
+        with create_mcp_tools(
             mcp_config,
             timeout=10.0,
+            mcp_oauth_token_storage=MCPSettingsOAuthTokenStore(),
         ) as client:
             tool = next(tool for tool in client.tools if tool.name == "read_subject")
             assert tool.executor is not None
@@ -310,6 +317,7 @@ def test_oauth_mcp_connection_persists_and_reuses_settings_state(
         assert isinstance(client_info, dict)
         assert client_info["client_id"]
 
+        # Runtime path: reuses persisted tokens, never re-authorizes.
         _HeadlessOAuth.reject_redirects = True
         with tool_provider.create_tools(
             persisted_mcp_config,
@@ -323,6 +331,63 @@ def test_oauth_mcp_connection_persists_and_reuses_settings_state(
             assert "OAuth mail subject: Follow-up" in observation.text
 
         assert _HeadlessOAuth.redirect_count == 1
+    finally:
+        reset_stores()
+
+
+def test_runtime_provider_rejects_interactive_auth_when_tokens_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    protected_oauth_mcp_server: str,
+):
+    """Conversation-start OAuth with no stored tokens fails fast, no browser.
+
+    The runtime provider must never fall into FastMCP's interactive flow
+    (browser + 300s callback wait) — needing it means the credential is
+    missing/dead and belongs back in the install-time re-auth flow.
+    """
+    reset_stores()
+    try:
+        config = Config(
+            session_api_keys=[],
+            conversations_path=tmp_path / "conversations",
+            secret_key=SecretStr("mcp-oauth-e2e-test-key"),
+        )
+        mcp_config = coerce_mcp_config(
+            {
+                "mail": {
+                    "url": protected_oauth_mcp_server,
+                    "transport": "http",
+                    "auth": {
+                        "strategy": "oauth2",
+                        "authentication": {
+                            "type": "oauth",
+                            "client_auth_method": "none",
+                            "scopes": ["mail.read"],
+                        },
+                    },
+                }
+            }
+        )
+        settings = PersistedSettings()
+        settings.agent_settings = settings.agent_settings.model_copy(
+            update={"mcp_config": mcp_config}
+        )
+        get_settings_store(config).save(settings)
+        tool_provider = create_settings_backed_mcp_tool_provider(config)
+
+        with patch("webbrowser.open") as mock_open:
+            with pytest.raises(Exception) as exc_info:
+                tool_provider.create_tools(mcp_config, timeout=10.0)
+        mock_open.assert_not_called()
+        from openhands.sdk.mcp.exceptions import MCPAuthorizationRequiredError
+
+        chain: list[BaseException] = []
+        current: BaseException | None = exc_info.value
+        while current is not None and len(chain) < 20:
+            chain.append(current)
+            current = current.__cause__ or current.__context__
+        assert any(isinstance(cause, MCPAuthorizationRequiredError) for cause in chain)
     finally:
         reset_stores()
 
@@ -385,3 +450,57 @@ def test_settings_backed_provider_forwards_on_tools_reconciled():
         provider.create_tools(config, on_tools_reconciled=callback)
 
     assert mock_create.call_args.kwargs["on_tools_reconciled"] is callback
+
+
+async def test_non_interactive_oauth_raises_instead_of_opening_a_browser():
+    """Runtime OAuth must never pop a browser during conversation start.
+
+    FastMCP's redirect_handler opens the system browser and then waits up
+    to 300s for the callback — far past the runtime connect timeout, so
+    the flow could never complete and retried (another browser tab) on
+    every conversation start. The non-interactive variant raises so the
+    per-server isolation can skip the server (perdix #17).
+    """
+    from openhands.agent_server.mcp_oauth_store import (
+        _non_interactive_oauth_factory,
+    )
+    from openhands.sdk.mcp.config import (
+        MCPOAuthAuthCredential,
+        MCPOAuthAuthentication,
+    )
+    from openhands.sdk.mcp.exceptions import MCPAuthorizationRequiredError
+
+    auth = MCPOAuthAuthCredential(
+        strategy="oauth2",
+        authentication=MCPOAuthAuthentication(type="oauth"),
+    )
+    server_spec = coerce_mcp_config({"sentry": {"url": "https://mcp.sentry.dev/mcp"}})[
+        "sentry"
+    ]
+    oauth = _non_interactive_oauth_factory("sentry", server_spec, auth, None)
+
+    assert oauth is not None
+    with patch("webbrowser.open") as mock_open:
+        with pytest.raises(MCPAuthorizationRequiredError):
+            await oauth.redirect_handler("https://sentry.io/oauth/authorize?x=1")
+    mock_open.assert_not_called()
+
+
+def test_settings_backed_provider_uses_non_interactive_oauth_factory():
+    """The runtime provider injects the browser-suppressing OAuth factory."""
+    provider = SettingsBackedMCPToolProvider()
+    config = coerce_mcp_config({"fake": {"command": "true"}})
+
+    with patch(
+        "openhands.agent_server.mcp_oauth_store.create_mcp_tools"
+    ) as mock_create:
+        provider.create_tools(config)
+
+    from openhands.agent_server.mcp_oauth_store import (
+        _non_interactive_oauth_factory,
+    )
+
+    assert (
+        mock_create.call_args.kwargs["mcp_oauth_factory"]
+        is _non_interactive_oauth_factory
+    )

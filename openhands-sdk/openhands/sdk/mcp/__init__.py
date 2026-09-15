@@ -12,13 +12,22 @@ from openhands.sdk.mcp.config import (
     MCPServer,
     to_fastmcp_mcp_config,
 )
-from openhands.sdk.mcp.exceptions import MCPError, MCPTimeoutError
+from openhands.sdk.mcp.exceptions import (
+    MCPAuthorizationRequiredError,
+    MCPError,
+    MCPTimeoutError,
+)
 
 
 if TYPE_CHECKING:
     from openhands.sdk.mcp.definition import MCPToolAction, MCPToolObservation
     from openhands.sdk.mcp.tool import MCPToolDefinition, MCPToolExecutor
-    from openhands.sdk.mcp.utils import MCPToolProvider, create_mcp_tools
+    from openhands.sdk.mcp.utils import (
+        MCPToolProvider,
+        NonInteractiveOAuth,
+        create_mcp_tools,
+        oauth_auth_from_authentication_config,
+    )
 
 
 def __getattr__(name: str):
@@ -30,7 +39,12 @@ def __getattr__(name: str):
         from openhands.sdk.mcp import tool
 
         value = getattr(tool, name)
-    elif name in {"MCPToolProvider", "create_mcp_tools"}:
+    elif name in {
+        "MCPToolProvider",
+        "create_mcp_tools",
+        "NonInteractiveOAuth",
+        "oauth_auth_from_authentication_config",
+    }:
         from openhands.sdk.mcp import utils
 
         value = getattr(utils, name)
@@ -54,7 +68,10 @@ __all__ = [
     "MCPToolExecutor",
     "MCPToolProvider",
     "create_mcp_tools",
+    "oauth_auth_from_authentication_config",
+    "NonInteractiveOAuth",
     "to_fastmcp_mcp_config",
     "MCPError",
     "MCPTimeoutError",
+    "MCPAuthorizationRequiredError",
 ]

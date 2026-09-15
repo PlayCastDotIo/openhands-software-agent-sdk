@@ -17,3 +17,14 @@ class MCPTimeoutError(MCPError):
         self.timeout = timeout
         self.config = config
         super().__init__(message)
+
+
+class MCPAuthorizationRequiredError(MCPError):
+    """An OAuth MCP server needs interactive (browser) authorization.
+
+    Raised by non-interactive OAuth clients instead of opening a browser,
+    so callers can skip the server and let the user re-authorize through
+    an explicit settings/install flow.
+    """
+
+    pass

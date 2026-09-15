@@ -22,7 +22,10 @@ from openhands.sdk.mcp.config import (
     enabled_mcp_servers,
     to_fastmcp_mcp_config,
 )
-from openhands.sdk.mcp.exceptions import MCPTimeoutError
+from openhands.sdk.mcp.exceptions import (
+    MCPAuthorizationRequiredError,
+    MCPTimeoutError,
+)
 from openhands.sdk.mcp.tool import MCPToolDefinition
 
 
@@ -87,10 +90,11 @@ def provider_supports_on_tools_reconciled(provider: MCPToolProvider) -> bool:
     )
 
 
-def _oauth_auth_from_authentication_config(
+def oauth_auth_from_authentication_config(
     authentication: MCPOAuthAuthentication | None,
     *,
     mcp_oauth_token_storage: AsyncKeyValue | None = None,
+    oauth_cls: type[OAuth] | None = None,
 ) -> OAuth | None:
     """Build FastMCP OAuth auth from explicit SDK MCP auth metadata."""
     if authentication is None:
@@ -101,7 +105,7 @@ def _oauth_auth_from_authentication_config(
     if client_auth_method is not None:
         additional_client_metadata["token_endpoint_auth_method"] = client_auth_method
 
-    return OAuth(
+    return (oauth_cls or OAuth)(
         scopes=authentication.scopes,
         client_name=authentication.client_name or "FastMCP Client",
         token_storage=mcp_oauth_token_storage,
@@ -112,6 +116,25 @@ def _oauth_auth_from_authentication_config(
         if authentication.client_secret is not None
         else None,
     )
+
+
+class NonInteractiveOAuth(OAuth):
+    """OAuth client that fails fast instead of opening a browser.
+
+    Conversation-start MCP connections must not block on an interactive
+    authorization flow: FastMCP waits up to 300s for the browser callback
+    inside a much shorter connect timeout, so the flow can never complete
+    and retries (opening another browser tab) on every start. Needing
+    interactive auth means the stored tokens are missing or dead — raise
+    so the caller skips the server and the user re-authorizes through the
+    explicit MCP settings flow instead.
+    """
+
+    async def redirect_handler(self, authorization_url: str) -> None:
+        raise MCPAuthorizationRequiredError(
+            "MCP server requires interactive OAuth re-authorization; "
+            f"authorization URL: {authorization_url}"
+        )
 
 
 def _prepare_mcp_config(
@@ -138,7 +161,7 @@ def _prepare_mcp_config(
                 mcp_oauth_token_storage,
             )
             if mcp_oauth_factory is not None
-            else _oauth_auth_from_authentication_config(
+            else oauth_auth_from_authentication_config(
                 auth.authentication,
                 mcp_oauth_token_storage=mcp_oauth_token_storage,
             )

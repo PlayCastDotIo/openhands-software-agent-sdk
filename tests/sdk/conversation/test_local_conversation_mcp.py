@@ -152,6 +152,68 @@ def test_legacy_provider_without_on_tools_reconciled_still_works(
     conversation.close()
 
 
+def test_one_failing_mcp_server_does_not_block_the_others(
+    tmp_path: Path,
+) -> None:
+    """A server that fails to connect is skipped; the rest still register.
+
+    One dead server (e.g. an OAuth server whose tokens expired) must not
+    take down the whole MCP init — otherwise a single expired credential
+    breaks every conversation start and blocks all other servers' tools.
+    """
+    good_client = EmptyMCPClient()
+    good_client.tools = [
+        MCPToolDefinition.create(
+            mcp_tool=mcp_types.Tool(
+                name="good_tool",
+                description="good",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            mcp_client=cast(MCPClient, good_client),
+        )[0]
+    ]
+
+    class FlakyMCPToolProvider:
+        def create_tools(
+            self,
+            mcp_config: dict[str, MCPServer],
+            timeout: float = 30.0,
+            *,
+            on_tools_changed: Any = None,
+            on_tools_reconciled: Any = None,
+        ) -> MCPClient:
+            if "sentry" in mcp_config:
+                raise RuntimeError("OAuth re-authorization required")
+            return cast(MCPClient, good_client)
+
+    conversation = LocalConversation(
+        agent=Agent(
+            llm=LLM(model="test-model", api_key=SecretStr("test-key")),
+            tools=[],
+            include_default_tools=[],
+            mcp_config=coerce_mcp_config(
+                {
+                    "sentry": {"url": "https://mcp.sentry.dev/mcp"},
+                    "good": {"command": "true"},
+                }
+            ),
+        ),
+        workspace=str(tmp_path),
+        visualizer=None,
+        mcp_tool_provider=cast(MCPToolProvider, FlakyMCPToolProvider()),
+    )
+
+    conversation._ensure_agent_ready()
+
+    mcp_tool_names = {
+        name
+        for name, tool in conversation.agent.tools_map.items()
+        if isinstance(tool, MCPToolDefinition)
+    }
+    assert mcp_tool_names == {"good_tool"}
+    conversation.close()
+
+
 class _KwargsMCPToolProvider:
     """A provider that accepts arbitrary keywords via **kwargs."""
 

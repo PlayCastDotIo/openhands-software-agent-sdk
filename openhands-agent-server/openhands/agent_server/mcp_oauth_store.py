@@ -14,6 +14,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple, SupportsFloat
 
+from key_value.aio.protocols import AsyncKeyValue
+
 from openhands.agent_server.config import Config
 from openhands.agent_server.persistence import PersistedSettings, get_settings_store
 from openhands.sdk.logger import get_logger
@@ -25,13 +27,42 @@ from openhands.sdk.mcp.config import (
     MCPServer,
 )
 from openhands.sdk.mcp.utils import (
+    NonInteractiveOAuth,
     ToolsChangedCallback,
     ToolsReconciledCallback,
     create_mcp_tools,
+    oauth_auth_from_authentication_config,
 )
 
 
 logger = get_logger(__name__)
+
+
+def _non_interactive_oauth_factory(
+    server_name: str,
+    server_spec: MCPServer,
+    auth: MCPOAuthAuthCredential,
+    mcp_oauth_token_storage: AsyncKeyValue | None,
+) -> NonInteractiveOAuth | None:
+    """Runtime OAuth that raises instead of opening a browser.
+
+    Conversation-start MCP connections run unattended; an interactive
+    authorization flow would pop a browser and block until the connect
+    timeout kills it — every time, since it can never complete. Stored
+    tokens still authenticate transparently (including refresh); only a
+    genuinely missing/dead credential raises, and the per-server isolation
+    in conversation init skips that server.
+    """
+    del server_name, server_spec
+    oauth = oauth_auth_from_authentication_config(
+        auth.authentication,
+        mcp_oauth_token_storage=mcp_oauth_token_storage,
+        oauth_cls=NonInteractiveOAuth,
+    )
+    if oauth is None:
+        return None
+    assert isinstance(oauth, NonInteractiveOAuth)
+    return oauth
 
 
 class _OAuthKeySpec(NamedTuple):
@@ -344,6 +375,7 @@ class SettingsBackedMCPToolProvider:
             mcp_config,
             timeout,
             mcp_oauth_token_storage=MCPSettingsOAuthTokenStore(),
+            mcp_oauth_factory=_non_interactive_oauth_factory,
             on_tools_changed=on_tools_changed,
             on_tools_reconciled=on_tools_reconciled,
         )

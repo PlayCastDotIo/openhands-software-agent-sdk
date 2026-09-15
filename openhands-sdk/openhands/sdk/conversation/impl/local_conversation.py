@@ -1352,10 +1352,24 @@ class LocalConversation(BaseConversation):
                 "removals/updates won't reach the agent for this provider",
                 type(self._mcp_tool_provider).__name__,
             )
-        client = self._mcp_tool_provider.create_tools(
-            mcp_config, _RUNTIME_MCP_TIMEOUT_SECS, **create_kwargs
-        )
-        return list(client.tools)
+        # Connect per server: one unreachable server (expired OAuth token,
+        # dead process, bad URL) must not take down the whole MCP init and
+        # with it every other server's tools.
+        tools: list[ToolDefinition] = []
+        for server_name, server in mcp_config.items():
+            try:
+                client = self._mcp_tool_provider.create_tools(
+                    {server_name: server}, _RUNTIME_MCP_TIMEOUT_SECS, **create_kwargs
+                )
+            except Exception:
+                logger.warning(
+                    "Skipping MCP server %r: failed to connect or list tools",
+                    server_name,
+                    exc_info=True,
+                )
+                continue
+            tools.extend(client.tools)
+        return tools
 
     def _on_mcp_tools_reconciled(
         self,
