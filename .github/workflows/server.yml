@@ -17,7 +17,7 @@ on:
             image:
                 description: GHCR image name
                 type: string
-                default: ghcr.io/openhands/agent-server
+                default: ghcr.io/playcastdotio/agent-server
             platforms:
                 description: Target platforms
                 type: string
@@ -319,7 +319,7 @@ jobs:
         runs-on: ${{ matrix.runner }}
 
         env:
-            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/openhands/agent-server' }}
+            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/playcastdotio/agent-server' }}
             BASE_IMAGE: ${{ inputs.base_image != '' && inputs.base_image || matrix.base_image }}
             # The maybe-empty value (inputs.install_acp_providers) must be the
             # LAST operand: GitHub Actions' `A && B || C` collapses to C
@@ -485,7 +485,7 @@ jobs:
             matrix:
                 variant: [python, java, golang]
         env:
-            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/openhands/agent-server' }}
+            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/playcastdotio/agent-server' }}
 
         steps:
             - name: Download build info to extract SHORT_SHA

@@ -39,7 +39,7 @@ def _write_client_fixture(root: Path, version: str) -> None:
             {
                 "config": {
                     "agentServerImage": (
-                        f"ghcr.io/openhands/agent-server:{version}-python"
+                        f"ghcr.io/playcastdotio/agent-server:{version}-python"
                     )
                 }
             },
@@ -48,13 +48,13 @@ def _write_client_fixture(root: Path, version: str) -> None:
         + "\n"
     )
     (root / ".github" / "workflows" / "integration-tests.yml").write_text(
-        f"image: ghcr.io/openhands/agent-server:{version}-python\n"
+        f"image: ghcr.io/playcastdotio/agent-server:{version}-python\n"
     )
     (root / "AGENTS.md").write_text(
         f"Pinned to software-agent-sdk v{version} and `v{version}`.\n"
     )
     (root / "README.md").write_text(
-        f"Use ghcr.io/openhands/agent-server:{version}-python.\n"
+        f"Use ghcr.io/playcastdotio/agent-server:{version}-python.\n"
     )
 
 

@@ -70,7 +70,7 @@ It also runs on every push to `main` as ongoing smoke coverage. It:
 - ✅ Generates a combined `SHA256SUMS` and attaches the binaries and
   `openapi.json` to the GitHub release on release/manual runs
 - ✅ Verifies that the multi-arch Docker manifest
-  `ghcr.io/openhands/agent-server:<image-tag>-<variant>` published by
+  `ghcr.io/playcastdotio/agent-server:<image-tag>-<variant>` published by
   `server.yml` covers both `linux/amd64` and `linux/arm64` for every variant
   (`python`, `java`, `golang`)
 - ✅ Pulls each variant on each architecture with `--platform=linux/<arch>`,

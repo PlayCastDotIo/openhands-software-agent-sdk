@@ -339,7 +339,7 @@ jobs:
                   VERSION: ${{ steps.get_version.outputs.version }}
               run: |
                   set -euo pipefail
-                  IMAGE="ghcr.io/openhands/agent-server:${VERSION}-python"
+                  IMAGE="ghcr.io/playcastdotio/agent-server:${VERSION}-python"
                   MAX_ATTEMPTS=90
                   SLEEP_SECONDS=30
                   echo "⏳ Waiting for ${IMAGE} to be published..."
@@ -467,7 +467,7 @@ jobs:
 
                   Updates the pinned OpenHands software-agent-sdk / agent-server image from v${CURRENT} to v${VERSION} (package.json config.agentServerImage, plus the integration-tests.yml, AGENTS.md, and README.md mirrors).
 
-                  CI + integration tests on this PR run against ghcr.io/openhands/agent-server:${VERSION}-python, validating the client against the new server before merge. This does not release the npm package.
+                  CI + integration tests on this PR run against ghcr.io/playcastdotio/agent-server:${VERSION}-python, validating the client against the new server before merge. This does not release the npm package.
 
                   ## Agent Server API change summary
 

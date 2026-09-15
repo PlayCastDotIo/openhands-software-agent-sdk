@@ -18,7 +18,7 @@ from typing import Any
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 IMAGE_RE = re.compile(
-    r"^ghcr\.io/openhands/agent-server:(?P<version>\d+\.\d+\.\d+)-python$"
+    r"^ghcr\.io/playcastdotio/agent-server:(?P<version>\d+\.\d+\.\d+)-python$"
 )
 VERSION_MIRRORS = (
     Path("package.json"),
@@ -66,7 +66,7 @@ def _current_version(package_json: dict[str, Any]) -> str:
     if not isinstance(image, str) or not (match := IMAGE_RE.fullmatch(image)):
         raise ValueError(
             "package.json config.agentServerImage must be an exact "
-            "ghcr.io/openhands/agent-server:X.Y.Z-python release image"
+            "ghcr.io/playcastdotio/agent-server:X.Y.Z-python release image"
         )
     return match.group("version")
 
@@ -74,8 +74,8 @@ def _current_version(package_json: dict[str, Any]) -> str:
 def _replace_version_mirror(text: str, previous: str, target: str) -> str:
     replacements = (
         (
-            f"ghcr.io/openhands/agent-server:{previous}-python",
-            f"ghcr.io/openhands/agent-server:{target}-python",
+            f"ghcr.io/playcastdotio/agent-server:{previous}-python",
+            f"ghcr.io/playcastdotio/agent-server:{target}-python",
         ),
         (
             f"software-agent-sdk v{previous}",
