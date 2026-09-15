@@ -9,6 +9,7 @@ See: https://github.com/OpenHands/software-agent-sdk/issues/4421
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -26,6 +27,16 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 OPENROUTER_ENDPOINTS_BASE = "https://openrouter.ai/api/v1/models"
+OPENROUTER_PRESETS_BASE = "https://openrouter.ai/api/v1/presets"
+
+
+def _bearer_headers(llm: LLM) -> dict[str, str]:
+    if llm.api_key is None:
+        return {}
+    from pydantic import SecretStr
+
+    assert isinstance(llm.api_key, SecretStr)
+    return {"Authorization": f"Bearer {llm.api_key.get_secret_value()}"}
 
 
 def _openrouter_model_id(llm: LLM) -> str | None:
@@ -47,7 +58,10 @@ def _openrouter_model_id(llm: LLM) -> str | None:
 def _normalize(name: Any) -> str:
     if not isinstance(name, str):
         return ""
-    return name.strip().casefold()
+    # Routing configs slugify provider names (``z-ai``, ``amazon-bedrock``)
+    # while the endpoints catalog uses display names (``Z.AI``,
+    # ``Amazon Bedrock``) — canonicalize away all separator variants.
+    return re.sub(r"[\s\-_.]+", "", name.strip().casefold())
 
 
 def _provider_routing(llm: LLM) -> dict[str, Any]:
@@ -170,11 +184,13 @@ def parse_openrouter_payload(
     )
 
 
-def _fetch_sync(url: str, client: httpx.Client | None) -> dict[str, Any] | None:
+def _fetch_sync(
+    url: str, client: httpx.Client | None, headers: dict[str, str] | None = None
+) -> dict[str, Any] | None:
     own_client = client is None
     effective = client or httpx.Client(timeout=RUNTIME_METADATA_TIMEOUT_SECONDS)
     try:
-        response = effective.get(url)
+        response = effective.get(url, headers=headers)
         response.raise_for_status()
         return response.json()
     except Exception as e:  # noqa: BLE001 - any failure falls back upstream
@@ -186,12 +202,12 @@ def _fetch_sync(url: str, client: httpx.Client | None) -> dict[str, Any] | None:
 
 
 async def _fetch_async(
-    url: str, client: httpx.AsyncClient | None
+    url: str, client: httpx.AsyncClient | None, headers: dict[str, str] | None = None
 ) -> dict[str, Any] | None:
     own_client = client is None
     effective = client or httpx.AsyncClient(timeout=RUNTIME_METADATA_TIMEOUT_SECONDS)
     try:
-        response = await effective.get(url)
+        response = await effective.get(url, headers=headers)
         response.raise_for_status()
         return response.json()
     except Exception as e:  # noqa: BLE001 - any failure falls back upstream
@@ -202,18 +218,62 @@ async def _fetch_async(
             await effective.aclose()
 
 
+def _parse_preset_config(
+    payload: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]] | None:
+    """Extract (model id, provider routing) from a preset API response.
+
+    The endpoints catalog does not serve preset slugs (404); the preset's
+    designated version holds the underlying model and the account's routing
+    config, which is authoritative for what OpenRouter will actually serve.
+    Presets defined with a multi-model fallback ``models`` list are not
+    resolved (no single endpoints feed to query); they fall back to
+    model-level metadata like any unresolvable route.
+    """
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    version = data.get("designated_version")
+    if not isinstance(version, dict):
+        return None
+    config = version.get("config")
+    if not isinstance(config, dict):
+        return None
+    model = config.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    routing = config.get("provider")
+    return model, routing if isinstance(routing, dict) else {}
+
+
 def resolve_openrouter_sync(
     llm: LLM, *, http_client: httpx.Client | None = None
 ) -> ModelRuntimeMetadata | None:
     model_id = _openrouter_model_id(llm)
     if not model_id:
         return None
+    routing = _provider_routing(llm)
+    if model_id.startswith("@preset/"):
+        preset = _parse_preset_config(
+            _fetch_sync(
+                f"{OPENROUTER_PRESETS_BASE}/{model_id.removeprefix('@preset/')}",
+                http_client,
+                headers=_bearer_headers(llm),
+            )
+        )
+        if preset is None:
+            return None
+        model_id, preset_routing = preset
+        if preset_routing:
+            routing = preset_routing
     payload = _fetch_sync(
         f"{OPENROUTER_ENDPOINTS_BASE}/{model_id}/endpoints", http_client
     )
     if payload is None:
         return None
-    return parse_openrouter_payload(payload, _provider_routing(llm))
+    return parse_openrouter_payload(payload, routing)
 
 
 async def aresolve_openrouter(
@@ -222,9 +282,23 @@ async def aresolve_openrouter(
     model_id = _openrouter_model_id(llm)
     if not model_id:
         return None
+    routing = _provider_routing(llm)
+    if model_id.startswith("@preset/"):
+        preset = _parse_preset_config(
+            await _fetch_async(
+                f"{OPENROUTER_PRESETS_BASE}/{model_id.removeprefix('@preset/')}",
+                http_client,
+                headers=_bearer_headers(llm),
+            )
+        )
+        if preset is None:
+            return None
+        model_id, preset_routing = preset
+        if preset_routing:
+            routing = preset_routing
     payload = await _fetch_async(
         f"{OPENROUTER_ENDPOINTS_BASE}/{model_id}/endpoints", http_client
     )
     if payload is None:
         return None
-    return parse_openrouter_payload(payload, _provider_routing(llm))
+    return parse_openrouter_payload(payload, routing)

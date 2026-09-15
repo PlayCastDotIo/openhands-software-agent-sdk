@@ -141,6 +141,32 @@ def test_parse_provider_names_normalized_case_insensitively():
     assert md.max_input_tokens == 262144
 
 
+def test_parse_provider_names_normalized_across_separators():
+    """Routing-config slugs and catalog display names differ in separators.
+
+    OpenRouter preset configs write providers as slugs (``z-ai``,
+    ``amazon-bedrock``) while the endpoints catalog uses display names
+    (``Z.AI``, ``Amazon Bedrock``). Eligibility must match across
+    dash/dot/space/underscore variants or every route is filtered out.
+    """
+    payload = {
+        "data": {
+            "endpoints": [
+                {"provider_name": "Z.AI", "context_length": 262144},
+                {"provider_name": "Amazon Bedrock", "context_length": 1050000},
+            ]
+        }
+    }
+    md = orm.parse_openrouter_payload(
+        payload, {"only": ["z-ai"], "allow_fallbacks": False}
+    )
+    assert md is not None and md.max_input_tokens == 262144
+    md = orm.parse_openrouter_payload(
+        payload, {"only": ["amazon-bedrock"], "allow_fallbacks": False}
+    )
+    assert md is not None and md.max_input_tokens == 1050000
+
+
 def test_parse_unmatched_order_falls_back_to_none():
     # An explicit order referencing providers absent from the catalog is not
     # safely interpretable; model-level metadata should be used instead.
@@ -242,6 +268,95 @@ def test_async_resolution_updates_effective():
     assert md is not None
     assert md.confidence == "exact"
     assert llm.effective_max_input_tokens == 262144
+
+
+# ---------------------------------------------------------------------------
+# Preset (@preset/<slug>) resolution
+# ---------------------------------------------------------------------------
+
+PRESET_PAYLOAD = {
+    "data": {
+        "slug": "flash",
+        "designated_version": {
+            "config": {
+                "model": "deepseek/deepseek-v4-flash-0731",
+                "provider": {"only": ["CoreWeave"], "allow_fallbacks": True},
+            }
+        },
+    }
+}
+
+
+def _preset_llm(**overrides) -> LLM:
+    from pydantic import SecretStr
+
+    return LLM(
+        model=overrides.pop("model", "openrouter/@preset/flash"),
+        api_key=SecretStr("test-key"),
+        **overrides,
+    )
+
+
+def _preset_handler(
+    preset_payload=PRESET_PAYLOAD, endpoints_payload=PAYLOAD, *, preset_status=200
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/presets/" in request.url.path:
+            assert request.headers.get("authorization") == "Bearer test-key"
+            if preset_status != 200:
+                return httpx.Response(preset_status, text="boom")
+            return httpx.Response(200, json=preset_payload)
+        # The real endpoints catalog 404s for preset slugs; only real model
+        # ids are served.
+        if "@preset" in request.url.path:
+            return httpx.Response(404, text="Not Found")
+        assert "/endpoints" in request.url.path
+        return httpx.Response(200, json=endpoints_payload)
+
+    return handler
+
+
+def test_preset_resolution_uses_designated_version_config():
+    """@preset/<slug> must resolve via the presets API to the underlying model.
+
+    The endpoints catalog 404s for preset slugs, so preset profiles never got
+    a context window — and the condenser never got a token threshold
+    (perdix #27). The preset's own provider routing gates the endpoints.
+    """
+    llm = _preset_llm()
+    md = orm.resolve_openrouter_sync(llm, http_client=_sync_client(_preset_handler()))
+    assert md is not None
+    # provider.only pins to CoreWeave's 262144 — not the 1M other routes offer.
+    assert md.max_input_tokens == 262144
+
+
+def test_preset_resolution_async():
+    llm = _preset_llm()
+
+    async def go():
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                orm.httpx, "AsyncClient", _patch_async_factory(_preset_handler())
+            )
+            return await llm.aresolve_runtime_metadata()
+
+    md = asyncio.run(go())
+    assert md is not None and md.max_input_tokens == 262144
+
+
+def test_preset_missing_or_invalid_config_falls_back_to_none():
+    llm = _preset_llm()
+    # Preset exists but has no usable designated-version model.
+    empty_cfg = {"data": {"slug": "flash", "designated_version": {"config": {}}}}
+    md = orm.resolve_openrouter_sync(
+        llm, http_client=_sync_client(_preset_handler(preset_payload=empty_cfg))
+    )
+    assert md is None
+    # Preset API itself failing also degrades gracefully.
+    md = orm.resolve_openrouter_sync(
+        llm, http_client=_sync_client(_preset_handler(preset_status=404))
+    )
+    assert md is None
 
 
 def test_acompletion_resolves_runtime_metadata(monkeypatch):
