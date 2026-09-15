@@ -62,6 +62,15 @@ def classify_error(code: str, detail: str = "") -> ErrorClassification:
     rate-limit from transient.
     """
     # ── authoritative code-based classification (checked first) ──────────
+    text = detail.casefold()
+    # OpenRouter's transient upstream 400 "Server tool request failed" is a
+    # provider-side transient (the upstream failed to process a request
+    # containing tool calls), NOT a config error — even though it surfaces as
+    # `LLMBadRequestError`/`OpenrouterException`, which the code map would
+    # otherwise send to CONFIG. Classify it before the code map (#31).
+    if "server tool request failed" in text:
+        return _failure(FailureKind.TRANSIENT, retryable=True, user_action="retry")
+
     if code in {"LLMAuthenticationError", "ACPAuthRequired"}:
         return _failure(FailureKind.AUTH, user_action="settings")
     if code in {"LLMRateLimitError"}:
@@ -96,8 +105,6 @@ def classify_error(code: str, detail: str = "") -> ErrorClassification:
         return _failure(FailureKind.INTERNAL)
 
     # ── detail-based classification (for opaque/generic wrapper codes) ───
-    text = detail.casefold()
-
     if any(
         token in text
         for token in (

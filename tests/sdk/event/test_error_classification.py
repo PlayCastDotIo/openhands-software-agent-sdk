@@ -98,3 +98,19 @@ def test_agent_error_event_preserves_explicit_classification() -> None:
         classification=explicit,
     )
     assert event.classification is explicit
+
+
+def test_openrouter_server_tool_request_failed_is_transient_not_config() -> None:
+    """#31: OpenRouter's transient upstream 400 "Server tool request failed"
+    must classify as TRANSIENT (retryable), not as a CONFIG error telling the
+    user to fix settings / restart the chat."""
+    detail = (
+        "litellm.BadRequestError: OpenrouterException - "
+        '{"error":{"message":"Server tool request failed","code":400,'
+        '"metadata":{"provider_name":null,"previous_errors":['
+        '{"code":400,"message":"Server tool request failed"}]}},'
+        '"user_id":"org_x"}'
+    )
+    classification = classify_error("LLMBadRequestError", detail)
+    assert classification.kind == FailureKind.TRANSIENT
+    assert classification.retryable is True
