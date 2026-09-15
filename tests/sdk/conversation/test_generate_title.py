@@ -289,7 +289,6 @@ def test_generate_title_disables_streaming_when_llm_streams(mock_transport):
     assert streaming_llm.stream is True
 
 
-
 @patch("openhands.sdk.llm.llm.LLM.completion")
 def test_generate_title_strips_inline_reasoning(mock_completion):
     """Guards #4530.
