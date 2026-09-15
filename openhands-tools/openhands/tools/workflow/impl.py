@@ -126,15 +126,33 @@ class WorkflowContext:
         if self._closed:
             raise WorkflowScriptError("WorkflowContext is already closed")
         task = await asyncio.to_thread(
-            self._manager.start_task,
-            prompt=prompt,
-            subagent_type=subagent_type,
-            description=description,
-            conversation=self._parent_conversation,
+            self._start_task_blocking,
+            prompt,
+            subagent_type,
+            description,
         )
         if task.error:
             raise RuntimeError(task.error)
         return task.result or ""
+
+    def _start_task_blocking(
+        self,
+        prompt: str,
+        subagent_type: str,
+        description: str | None,
+    ) -> _TaskLike:
+        """Synchronous wrapper around `_TaskStarter.start_task` for `to_thread`.
+
+        Passing `self._manager.start_task` directly with keyword arguments
+        makes pyright's `to_thread` ParamSpec inference fail (it can't bind the
+        defaulted kwargs); a concrete 3-arg wrapper keeps the types clean.
+        """
+        return self._manager.start_task(
+            prompt,
+            subagent_type=subagent_type,
+            description=description,
+            conversation=self._parent_conversation,
+        )
 
     async def map_agents(
         self,
