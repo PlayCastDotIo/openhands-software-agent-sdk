@@ -6,4 +6,5 @@ from openhands.tools.git_diff.definition import (
     GitDiffTool,
 )
 
+
 __all__ = ["GitDiffAction", "GitDiffObservation", "GitDiffTool"]

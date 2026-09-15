@@ -88,7 +88,9 @@ patch (or a per-file stat) directly, without a terminal round-trip.
 Examples:
 - Working tree vs HEAD: git_diff(ref="HEAD")
 - Two branches (PR review): git_diff(ref="origin/dev...origin/webrtcopt")
-- Two branches, one file: git_diff(ref="origin/dev...origin/webrtcopt", path="apps/realtime-api/src/signalling.ts")
+- Two branches, one file:
+  git_diff(ref="origin/dev...origin/webrtcopt",
+           path="apps/realtime-api/src/signalling.ts")
 - Stat overview: git_diff(ref="origin/dev...origin/webrtcopt", stat=true)
 - Range form: git_diff(ref_a="origin/dev", ref_b="origin/webrtcopt")
 - Working tree changes: git_diff()  (ref omitted)
