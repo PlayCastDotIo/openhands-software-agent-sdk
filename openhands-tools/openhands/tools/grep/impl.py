@@ -164,37 +164,38 @@ class GrepExecutor(ToolExecutor[GrepAction, GrepObservation]):
             return fnmatch.fnmatch(filename, include_pattern)
         return not filename.startswith(".")
 
-    def _match_mtime(self, path: Path) -> float:
-        """Return a sortable modification time for matched paths."""
-        try:
-            return path.stat().st_mtime
-        except OSError:
-            return float("-inf")
-
     def _finalize_matches(
         self,
         matches: list[Path],
         search_path: Path,
         include_pattern: str | None,
     ) -> tuple[list[str], bool]:
-        """Filter, sort, and truncate raw match paths."""
-        unique_matches: dict[str, Path] = {}
+        """Filter, dedupe, and truncate raw match paths.
+
+        The ripgrep backend already returns matches sorted by modification
+        time (``--sortr=modified``), so re-stat()ing every match for a re-sort
+        is redundant — and on Windows a per-match ``stat()``/``resolve()`` over
+        a large match set is the dominant cost (tens of minutes). Dedupe by
+        string path (no syscall), apply the display filter, preserve that
+        order, and cap — stat()ing nothing (#32).
+        """
+        seen: set[str] = set()
+        ordered: list[Path] = []
         for match in matches:
             try:
                 resolved = match.resolve()
             except OSError:
                 continue
+            key = str(resolved)
+            if key in seen:
+                continue
             if not self._path_matches_filters(resolved, search_path, include_pattern):
                 continue
-            unique_matches[str(resolved)] = resolved
+            seen.add(key)
+            ordered.append(resolved)
 
-        sorted_matches = sorted(
-            unique_matches.values(),
-            key=self._match_mtime,
-            reverse=True,
-        )
-        truncated = len(sorted_matches) > self._MAX_MATCHES
-        return [str(path) for path in sorted_matches[: self._MAX_MATCHES]], truncated
+        truncated = len(ordered) > self._MAX_MATCHES
+        return [str(path) for path in ordered[: self._MAX_MATCHES]], truncated
 
     def _build_observation(
         self,
@@ -226,11 +227,23 @@ class GrepExecutor(ToolExecutor[GrepAction, GrepObservation]):
     def _execute_with_ripgrep(
         self, action: GrepAction, search_path: Path
     ) -> GrepObservation:
-        """Execute grep content search using ripgrep."""
+        """Execute grep content search using ripgrep.
+
+        ``--no-ignore`` surfaces files hidden by ``.gitignore`` (e.g. build
+        outputs the agent can see with ``read_file``), which the default
+        respect-for-gitignore silently drops (#32 missed matches). We still
+        exclude ``node_modules`` and ``.git`` explicitly — the two huge noise
+        trees that make whole-repo searches slow and bury real matches.
+        """
         cmd = [
             "rg",
             "-l",
             "-i",
+            "--no-ignore",
+            "-g",
+            "!node_modules/**",
+            "-g",
+            "!.git/**",
             action.pattern,
             str(search_path),
             "--sortr=modified",

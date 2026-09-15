@@ -320,3 +320,52 @@ def test_grep_executor_concurrent():
         assert all(
             all("beta_" in Path(f).name for f in matches) for matches in results_b
         )
+
+
+def test_grep_executor_finds_files_in_gitignored_directories(tmp_path: Path) -> None:
+    """#32: the tool must not hide matches the agent can see with read_file.
+    A file under a `.gitignore`d directory (e.g. a build output dir) is still a
+    real match — the agent read it with read_file — and the grep tool must
+    surface it, not skip it.
+    """
+    import subprocess
+
+    # Real git repo so ripgrep actually applies .gitignore rules.
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("dist/\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    target = dist / "bundle.js"
+    target.write_text("const ctaHref = 1;")
+
+    executor = GrepExecutor(working_dir=str(tmp_path))
+    observation = executor(GrepAction(pattern="ctaHref"))
+
+    assert target.resolve().as_posix() in [
+        Path(m).resolve().as_posix() for m in observation.matches
+    ]
+
+
+def test_finalize_matches_does_not_stat_every_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#32: `_finalize_matches` must not call `stat()` on every matched path.
+    On a large match set, per-match `stat()`/`resolve()` is the dominant cost
+    (tens of minutes on Windows). Only the surfaced matches should be timed.
+    """
+    executor = GrepExecutor(working_dir=str(tmp_path))
+    matches = [tmp_path / f"file_{i}.py" for i in range(200)]
+    stat_calls = 0
+    original_stat = Path.stat
+
+    def counting_stat(self: Path, *args, **kwargs):  # noqa: ANN001, ANN202
+        nonlocal stat_calls
+        stat_calls += 1
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", counting_stat)
+
+    executor._finalize_matches(matches, tmp_path, None)
+
+    # Only the surfaced (≤ _MAX_MATCHES) matches should be stat'ed, not all 200.
+    assert stat_calls <= executor._MAX_MATCHES
