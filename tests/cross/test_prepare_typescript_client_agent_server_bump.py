@@ -33,7 +33,6 @@ validate_openapi_artifact = _prod.validate_openapi_artifact
 
 
 def _write_client_fixture(root: Path, version: str) -> None:
-    (root / ".github" / "workflows").mkdir(parents=True)
     (root / "package.json").write_text(
         json.dumps(
             {
@@ -88,7 +87,6 @@ def test_prepare_bump_updates_all_mirrors_from_exact_artifact(tmp_path: Path):
     assert result.target_version == "1.38.0"
     assert result.changed_files == (
         Path("package.json"),
-        Path(".github/workflows/integration-tests.yml"),
         Path("AGENTS.md"),
         Path("README.md"),
     )

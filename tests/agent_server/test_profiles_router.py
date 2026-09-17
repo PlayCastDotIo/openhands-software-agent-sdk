@@ -1770,7 +1770,7 @@ def test_validate_profile_responses_api(client):
 
     Regression: the endpoint must route through ``aresponses`` for profiles
     where ``uses_responses_api()`` is true, matching the runtime dispatch used
-    by real conversations (`amake_llm_completion`) — otherwise preflight would
+    by real conversations (`LLM.agenerate`) — otherwise preflight would
     validate a different path than the server actually calls.
     """
     from unittest.mock import MagicMock
@@ -2034,7 +2034,7 @@ def test_validate_profile_subscription_restores_credentials(client):
             "/api/profiles/sub-profile/validate",
             json={
                 "llm": {
-                    "model": "openai/gpt-5.6-luna",
+                    "model": "openai/gpt-6-astra",
                     "auth_type": "subscription",
                     "subscription_vendor": "openai",
                     "stream": True,
@@ -2071,7 +2071,7 @@ def test_validate_profile_subscription_missing_credentials(client):
             "/api/profiles/sub-profile/validate",
             json={
                 "llm": {
-                    "model": "openai/gpt-5.6-luna",
+                    "model": "openai/gpt-6-astra",
                     "auth_type": "subscription",
                     "subscription_vendor": "openai",
                     "stream": True,

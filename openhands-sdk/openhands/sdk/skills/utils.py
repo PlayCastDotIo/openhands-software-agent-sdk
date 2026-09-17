@@ -16,7 +16,7 @@ from fastmcp.mcp_config import MCPConfig
 from openhands.sdk.git.cached_repo import GitHelper, try_cached_clone_or_update
 from openhands.sdk.logger import get_logger
 from openhands.sdk.skills.exceptions import SkillValidationError
-from openhands.sdk.utils.path import to_posix_path
+from openhands.sdk.utils.path import get_user_persistence_dir, to_posix_path
 
 
 if TYPE_CHECKING:
@@ -458,12 +458,16 @@ def find_skill_md_directories(skill_dir: Path) -> list[Path]:
     return results
 
 
-def find_regular_md_files(skill_dir: Path, exclude_dirs: set[Path]) -> list[Path]:
+def find_regular_md_files(
+    skill_dir: Path, exclude_dirs: set[Path], recursive: bool = True
+) -> list[Path]:
     """Find regular .md skill files, excluding SKILL.md and files in excluded dirs.
 
     Args:
         skill_dir: Path to the skills directory.
         exclude_dirs: Set of directories to exclude (e.g., SKILL.md directories).
+        recursive: If False, only scan the immediate children of skill_dir,
+            where every .md file except a README is a skill.
 
     Returns:
         List of paths to regular .md skill files.
@@ -471,6 +475,12 @@ def find_regular_md_files(skill_dir: Path, exclude_dirs: set[Path]) -> list[Path
     files: list[Path] = []
     if not skill_dir.exists():
         return files
+    if not recursive:
+        return [
+            f
+            for f in sorted(skill_dir.glob("*.md"))
+            if f.is_file() and f.name.lower() != "readme.md"
+        ]
     for f in sorted(skill_dir.rglob("*.md")):
         is_readme = f.name == "README.md"
         is_skill_md = f.name.lower() == "skill.md"
@@ -486,6 +496,7 @@ def load_and_categorize(
     repo_skills: dict[str, Skill],
     knowledge_skills: dict[str, Skill],
     agent_skills: dict[str, Skill],
+    strict: bool = True,
 ) -> None:
     """Load a skill and categorize it.
 
@@ -497,11 +508,12 @@ def load_and_categorize(
         repo_skills: Dictionary for skills with trigger=None (permanent context).
         knowledge_skills: Dictionary for skills with triggers (progressive).
         agent_skills: Dictionary for AgentSkills standard SKILL.md files.
+        strict: If True, enforce strict AgentSkills name validation.
     """
     # Import here to avoid circular dependency
     from openhands.sdk.skills.skill import Skill
 
-    skill = Skill.load(path, skill_base_dir)
+    skill = Skill.load(path, skill_base_dir, strict=strict)
 
     # AgentSkills (SKILL.md directories) are a separate category from OpenHands skills.
     # They follow the AgentSkills standard and should be handled differently.
@@ -518,9 +530,10 @@ def get_skills_cache_dir() -> Path:
     """Get the local cache directory for public skills repository.
 
     Returns:
-        Path to the skills cache directory (~/.openhands/cache/skills).
+        Path to the ``cache/skills`` subdirectory of the user persistence
+        directory (``~/.openhands/cache/skills`` absent OH_PERSISTENCE_DIR).
     """
-    cache_dir = Path.home() / ".openhands" / "cache" / "skills"
+    cache_dir = get_user_persistence_dir() / "cache" / "skills"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 

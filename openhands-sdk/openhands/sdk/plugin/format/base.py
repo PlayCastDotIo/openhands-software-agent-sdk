@@ -18,7 +18,7 @@ from openhands.sdk.hooks import HookConfig
 from openhands.sdk.logger import get_logger
 from openhands.sdk.mcp.config import MCPServer
 from openhands.sdk.plugin.types import CommandDefinition, PluginManifest
-from openhands.sdk.skills.skill import Skill
+from openhands.sdk.skills.skill import Skill, load_skills_from_dir
 from openhands.sdk.skills.utils import find_skill_md
 from openhands.sdk.subagent.schema import AgentDefinition
 from openhands.sdk.utils.path import to_posix_path
@@ -96,7 +96,14 @@ class PluginFormat(ABC):
         """
         skills_dir = plugin_dir / "skills"
         if skills_dir.is_dir():
-            return _load_skills_from_skills_dir(skills_dir)
+            # Non-recursive per Agent Plugins §5: nested .md files are skill
+            # resources (e.g. references/), not additional skills.
+            repo, knowledge, agent = load_skills_from_dir(
+                skills_dir, strict=False, recursive=False
+            )
+            skills = [*repo.values(), *knowledge.values(), *agent.values()]
+            # Categorization groups skills by type; restore on-disk order.
+            return sorted(skills, key=lambda s: Path(s.source or ""))
 
         root_skill_md = find_skill_md(plugin_dir)
         if root_skill_md is not None:
@@ -144,30 +151,63 @@ class PluginFormat(ABC):
         )
 
 
-def _load_skills_from_skills_dir(skills_dir: Path) -> list[Skill]:
-    """Load every skill under a plugin's ``skills/`` directory."""
-    skills: list[Skill] = []
-    for item in sorted(skills_dir.iterdir()):
-        if item.is_dir():
-            skill_md = find_skill_md(item)
-            if skill_md:
-                try:
-                    # Skill.load() discovers resources, no need to do it again
-                    skill = Skill.load(skill_md, skills_dir, strict=False)
-                    skills.append(skill)
-                    logger.debug(f"Loaded skill: {skill.name} from {skill_md}")
-                except Exception as e:
-                    logger.warning(f"Failed to load skill from {item}: {e}")
-        elif item.suffix == ".md" and item.name.lower() != "readme.md":
-            # Also support single .md files in skills/ directory
-            try:
-                skill = Skill.load(item, skills_dir, strict=False)
-                skills.append(skill)
-                logger.debug(f"Loaded skill: {skill.name} from {item}")
-            except Exception as e:
-                logger.warning(f"Failed to load skill from {item}: {e}")
+def _read_hooks_config(root: Path) -> HookConfig | None:
+    """Read ``hooks/hooks.json`` under ``root``, or None if it is absent.
 
-    return skills
+    Shared by the concrete strategies: hooks, agents and commands use the same
+    on-disk layout in both formats — only the directory they are rooted at
+    differs (the plugin root for Claude Code, the client-extension directory for
+    Agent Plugins).
+    """
+    hooks_json = root / "hooks" / "hooks.json"
+    if not hooks_json.exists():
+        return None
+
+    try:
+        hook_config = HookConfig.load(path=hooks_json)
+        # A hooks.json that parses but declares no hooks yields an empty config.
+        # Keep that distinct from "file not present" (None). An unparseable or
+        # schema-invalid file raises out of load() and is caught below.
+        if hook_config.is_empty():
+            logger.info(f"No hooks configured in {hooks_json}")
+            return HookConfig()
+        logger.info(f"Loaded hooks from {hooks_json}")
+        return hook_config
+    except Exception as e:
+        logger.warning(f"Failed to load hooks from {hooks_json}: {e}")
+        return None
+
+
+def _read_command_definitions(root: Path) -> list[CommandDefinition]:
+    """Read command definitions from the ``commands/`` directory under ``root``.
+
+    Commands have no counterpart to :func:`load_agents_from_dir`, so this is the
+    one loader of the three the plugin format still owns. It applies the same
+    file predicate, so ``commands/`` and ``agents/`` stay symmetric.
+    """
+    commands_dir = root / "commands"
+    if not commands_dir.is_dir():
+        return []
+
+    commands: list[CommandDefinition] = []
+    for item in sorted(commands_dir.iterdir()):
+        if (
+            not item.is_dir()
+            and item.suffix.lower() == ".md"
+            and item.name
+            not in (
+                "README.md",
+                "readme.md",
+            )
+        ):
+            try:
+                command = CommandDefinition.load(item)
+                commands.append(command)
+                logger.debug(f"Loaded command: {command.name} from {item}")
+            except Exception as e:
+                logger.warning(f"Failed to load command from {item}: {e}")
+
+    return commands
 
 
 def _load_root_skill(plugin_dir: Path, skill_md: Path) -> list[Skill]:
